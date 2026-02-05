@@ -82,7 +82,30 @@ class CanvasTools:
                 "status": "error",
                 "message": f"Failed to focus on board item: {str(e)}"
             }
-    
+
+    async def focus_item(self, object_id: str) -> Dict[str, Any]:
+        """
+        Focus on a board item by its ID (simplified version).
+        Uses canvas_ops.focus_item under the hood.
+
+        Args:
+            object_id: The board object ID to focus on (e.g., 'lab-track-1')
+
+        Returns:
+            Dict with status and result
+        """
+        try:
+            import canvas_ops
+            logger.info(f"Focusing on board item: {object_id}")
+            result = await canvas_ops.focus_item(object_id)
+            return result
+        except Exception as e:
+            logger.error(f"Error focusing board item: {e}")
+            return {
+                "status": "error",
+                "message": f"Failed to focus on board item: {str(e)}"
+            }
+
     async def create_todo_on_board(self, patient_id: str, title: str, description: str, tasks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Create a TODO list on the clinical board.

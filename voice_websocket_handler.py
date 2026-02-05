@@ -64,6 +64,7 @@ class VoiceWebSocketHandler:
         self.client = None  # Lazy initialization - only create when needed
         self.should_stop = False  # Flag to stop audio playback
         self._recent_tool_calls = {}  # Track recent tool calls: {key: timestamp}
+        self.last_user_query = ""  # Track last user query for auto-focus fallback
     
     def _get_client(self):
         """Lazy initialization of Gemini client - only when needed"""
@@ -487,7 +488,88 @@ CRITICAL:
             logger.info(f"📤 Sent tool notification to UI: {tool_name} - {status}")
         except Exception as e:
             logger.error(f"Failed to send tool notification: {e}")
-    
+
+    async def send_todo_update_notification(self, todo_id: str, task_id: str, index: str, status: str):
+        """Send TODO task status update notification to UI for real-time updates"""
+        try:
+            payload = {
+                "type": "todo_update",
+                "todo_id": todo_id,
+                "task_id": task_id,
+                "index": index,
+                "status": status,
+                "timestamp": datetime.now().isoformat()
+            }
+            await self.websocket.send_json(payload)
+            logger.info(f"📤 Sent TODO update to UI: {todo_id}/{task_id} -> {status}")
+        except Exception as e:
+            logger.error(f"Failed to send TODO update notification: {e}")
+
+    async def animate_todo_with_notifications(self, todo_id: str, tasks: list):
+        """
+        Animate TODO task statuses with WebSocket notifications for real-time UI updates.
+        This is similar to side_agent._animate_todo_tasks but sends WebSocket notifications.
+        """
+        import random
+        try:
+            logger.info(f"🎬 Starting TODO animation with notifications for {todo_id}")
+            for task_idx, task in enumerate(tasks):
+                task_id = task.get('id', f'task-{task_idx}')
+
+                # Step 1: Mark parent task as executing
+                logger.info(f"⏳ Task {task_idx} ({task_id}): pending → executing")
+                await asyncio.sleep(1.5)
+                await canvas_ops.update_todo({
+                    "id": todo_id,
+                    "task_id": task_id,
+                    "index": "",
+                    "status": "executing"
+                })
+                # Notify frontend
+                await self.send_todo_update_notification(todo_id, task_id, "", "executing")
+
+                # Step 2: Animate subtodos if they exist
+                subtodos = task.get('subTodos', [])
+                if subtodos:
+                    logger.info(f"  📋 Processing {len(subtodos)} subtodos for task {task_idx}")
+                    for subtodo_idx, subtodo in enumerate(subtodos):
+                        # Mark subtodo as executing
+                        await asyncio.sleep(1)
+                        await canvas_ops.update_todo({
+                            "id": todo_id,
+                            "task_id": task_id,
+                            "index": str(subtodo_idx),
+                            "status": "executing"
+                        })
+                        await self.send_todo_update_notification(todo_id, task_id, str(subtodo_idx), "executing")
+
+                        # Mark subtodo as finished
+                        await asyncio.sleep(random.uniform(1, 2))
+                        await canvas_ops.update_todo({
+                            "id": todo_id,
+                            "task_id": task_id,
+                            "index": str(subtodo_idx),
+                            "status": "finished"
+                        })
+                        await self.send_todo_update_notification(todo_id, task_id, str(subtodo_idx), "finished")
+                else:
+                    await asyncio.sleep(1.5)
+
+                # Step 3: Mark parent task as finished
+                logger.info(f"✅ Task {task_idx} ({task_id}): executing → finished")
+                await canvas_ops.update_todo({
+                    "id": todo_id,
+                    "task_id": task_id,
+                    "index": "",
+                    "status": "finished"
+                })
+                await self.send_todo_update_notification(todo_id, task_id, "", "finished")
+                await asyncio.sleep(0.5)
+
+            logger.info(f"✅ TODO {todo_id} animation completed with notifications")
+        except Exception as e:
+            logger.error(f"⚠️ TODO animation error: {e}")
+
     def _is_duplicate_tool_call(self, function_name: str, arguments: dict) -> bool:
         """Check if this tool call is a duplicate of a recent one"""
         # Create a key from function name and arguments
@@ -548,10 +630,15 @@ CRITICAL:
                 result = ""
                 try:
                     if function_name == "get_patient_data":
+                        # Save the query for auto-focus fallback
+                        query_arg = arguments.get("query", "")
+                        if query_arg:
+                            self.last_user_query = query_arg
+
                         # Load full context if not already loaded
                         if not self.context_data:
                             self.context_data = await canvas_ops.get_board_items_async()
-                        
+
                         logger.info(f"📊 Context data type: {type(self.context_data)}, length: {len(self.context_data) if isinstance(self.context_data, (list, dict)) else 'N/A'}")
                         
                         # Search for "pulmonary" and related medical terms across all data
@@ -1024,10 +1111,10 @@ CRITICAL:
                         result = json.dumps(summary, indent=2)
                         
                         # Smart auto-focus: Check the QUERY keywords to focus on relevant section
-                        # Only focus if the query explicitly mentions that data type
-                        query_lower = arguments.get("query", "").lower() if "query" in arguments else ""
-                        
-                        if any(kw in query_lower for kw in ["lab", "labs", "lab result", "test result", "blood work", "bilirubin", "alt", "ast", "albumin"]):
+                        # Use last_user_query as fallback when query argument is empty (like chat agent)
+                        query_lower = arguments.get("query", "").lower() if "query" in arguments else self.last_user_query.lower()
+
+                        if any(kw in query_lower for kw in ["lab", "labs", "lab result", "test result", "blood work", "bilirubin", "alt", "ast", "albumin", "liver function", "lft", "blood test"]):
                             if summary.get('recent_labs') and len(summary.get('recent_labs', [])) > 0:
                                 logger.info("🎯 Query about labs detected, auto-focusing on lab timeline...")
                                 try:
@@ -1036,7 +1123,7 @@ CRITICAL:
                                     logger.info(f"✅ Auto-focused on labs: {focus_result}")
                                 except Exception as e:
                                     logger.error(f"Failed to auto-focus on labs: {e}")
-                        elif any(kw in query_lower for kw in ["medication", "med", "drug", "prescription", "lactulose", "furosemide", "propranolol"]):
+                        elif any(kw in query_lower for kw in ["medication", "med", "drug", "prescription", "lactulose", "furosemide", "propranolol", "medicine", "rx", "dosage"]):
                             if summary.get('current_medications') and len(summary.get('current_medications', [])) > 0:
                                 logger.info("🎯 Query about medications detected, auto-focusing on medication timeline...")
                                 try:
@@ -1045,7 +1132,7 @@ CRITICAL:
                                     logger.info(f"✅ Auto-focused on medications: {focus_result}")
                                 except Exception as e:
                                     logger.error(f"Failed to auto-focus on medications: {e}")
-                        elif any(kw in query_lower for kw in ["encounter", "visit", "admission", "hospital"]):
+                        elif any(kw in query_lower for kw in ["encounter", "visit", "admission", "hospital", "appointment", "clinic"]):
                             if summary.get('recent_encounters') and len(summary.get('recent_encounters', [])) > 0:
                                 logger.info("🎯 Query about encounters detected, auto-focusing on encounter timeline...")
                                 try:
@@ -1054,6 +1141,23 @@ CRITICAL:
                                     logger.info(f"✅ Auto-focused on encounters: {focus_result}")
                                 except Exception as e:
                                     logger.error(f"Failed to auto-focus on encounters: {e}")
+                        elif any(kw in query_lower for kw in ["risk", "adverse", "event", "complication", "danger", "warning"]):
+                            if summary.get('risk_events') or summary.get('key_events'):
+                                logger.info("🎯 Query about risks/events detected, auto-focusing on risk timeline...")
+                                try:
+                                    await asyncio.sleep(0.3)
+                                    focus_result = await canvas_ops.focus_item("risk-track-1")
+                                    logger.info(f"✅ Auto-focused on risks: {focus_result}")
+                                except Exception as e:
+                                    logger.error(f"Failed to auto-focus on risks: {e}")
+                        elif any(kw in query_lower for kw in ["patient", "profile", "demographic", "age", "name", "history", "who is"]):
+                            logger.info("🎯 Query about patient profile detected, auto-focusing on sidebar...")
+                            try:
+                                await asyncio.sleep(0.3)
+                                focus_result = await canvas_ops.focus_item("sidebar-1")
+                                logger.info(f"✅ Auto-focused on patient profile: {focus_result}")
+                            except Exception as e:
+                                logger.error(f"Failed to auto-focus on patient profile: {e}")
                     
                     elif function_name == "focus_board_item":
                         query = arguments.get("query", "").lower()
@@ -1123,9 +1227,39 @@ CRITICAL:
                     
                     elif function_name == "create_task":
                         query = arguments.get("query", "")
-                        # Use side_agent to generate and create task
-                        task_result = await side_agent.generate_task_workflow(query)
-                        result = f"Task created: {task_result}"
+                        # Save the query for auto-focus
+                        if query:
+                            self.last_user_query = query
+
+                        # Generate task JSON using side_agent (without animation)
+                        logger.info(f"📝 Creating task for: {query}")
+                        task_obj = await side_agent.generate_task_obj(query)
+
+                        # Create TODO on board
+                        todo_response = await canvas_ops.create_todo(task_obj)
+                        todo_id = todo_response.get('id')
+
+                        # Auto-focus on the newly created TODO
+                        if todo_id:
+                            logger.info(f"🎯 Auto-focusing on created TODO: {todo_id}")
+                            try:
+                                await asyncio.sleep(0.5)  # Brief delay for board to render
+                                await canvas_ops.focus_item(todo_id)
+                            except Exception as e:
+                                logger.error(f"Failed to auto-focus on TODO: {e}")
+
+                        # Start animation with WebSocket notifications for real-time updates
+                        if todo_id and 'todos' in task_obj:
+                            logger.info(f"🎬 Starting TODO animation with notifications for {todo_id}")
+                            # Run animation in background but WITH WebSocket notifications
+                            asyncio.create_task(self.animate_todo_with_notifications(todo_id, task_obj['todos']))
+
+                        result = json.dumps({
+                            "status": "success",
+                            "message": f"Task created: {task_obj.get('title', 'Task')}",
+                            "todo_id": todo_id,
+                            "tasks_count": len(task_obj.get('todos', []))
+                        })
                     
                     elif function_name == "send_to_easl":
                         question = arguments.get("question", "")
