@@ -46,23 +46,20 @@ logger = logging.getLogger("voice-session-manager")
 MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
 
 def get_voice_tool_declarations():
-    """Get the tool declarations for voice mode - same as chat agent"""
+    """Get the tool declarations for voice mode - STRICT versions for concise responses"""
     return [
         {
             "name": "get_patient_data",
-            "description": """MANDATORY: Call this tool to get patient information. Returns a JSON object with:
-- name, age, gender, date_of_birth, mrn (patient demographics)
-- current_medications: Array of medication strings with name, dose, indication, start/end dates
-- recent_labs: Array of lab results with biomarker name, value, unit, reference range, date, abnormal flag
-- risk_events: Array of risk assessments with date, riskScore (0-10), contributing factors
-- key_events: Array of clinical events with date, event name, clinical note
-- adverse_events: Array of adverse events with event, date, severity, causality
-- problem_list: Array of diagnoses and conditions
-- allergies: Patient allergies
-- clinical_notes: Recent clinical encounter notes
-- medical_history: Patient medical history summary
+            "description": """TRIGGER: User asks about patient (name/age/labs/meds/history)
+ACTION: Call this function IMMEDIATELY - do NOT respond with text first
+RESPONSE: After getting data, answer in MAX 5 WORDS
 
-Use this for ANY question about: patient name, age, medications, labs, test results, diagnoses, history, problems, allergies, risk, events.""",
+Example:
+User: "What's the ALT?"
+YOU: [CALL THIS FUNCTION] -> Answer: "110"
+NOT: "The ALT is 110 U/L which..."
+
+MANDATORY: Function call is REQUIRED. Text-only response is FORBIDDEN.""",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -71,13 +68,13 @@ Use this for ANY question about: patient name, age, medications, labs, test resu
         },
         {
             "name": "focus_board_item",
-            "description": "Focus on a specific board item (e.g., medication timeline, lab results, encounter notes)",
+            "description": "Focus on a specific board item. Say 'Done' after calling.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Natural language description of what to focus on"
+                        "description": "What to focus on"
                     }
                 },
                 "required": ["query"]
@@ -85,13 +82,13 @@ Use this for ANY question about: patient name, age, medications, labs, test resu
         },
         {
             "name": "create_task",
-            "description": "Create a TODO task for the patient",
+            "description": "Create a TODO task. Say 'Done' after calling.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Description of the task to create"
+                        "description": "Task description"
                     }
                 },
                 "required": ["query"]
@@ -99,13 +96,13 @@ Use this for ANY question about: patient name, age, medications, labs, test resu
         },
         {
             "name": "send_to_easl",
-            "description": "Send a clinical question to EASL for analysis",
+            "description": "Send question to EASL. Say 'Sent to EASL' after calling.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "question": {
                         "type": "string",
-                        "description": "Clinical question to analyze"
+                        "description": "Clinical question"
                     }
                 },
                 "required": ["question"]
@@ -113,7 +110,7 @@ Use this for ANY question about: patient name, age, medications, labs, test resu
         },
         {
             "name": "generate_dili_diagnosis",
-            "description": "Generate a DILI (Drug-Induced Liver Injury) diagnosis report for the patient. Creates a comprehensive diagnostic assessment including RUCAM score, causality assessment, and recommendations.",
+            "description": "Generate DILI diagnosis. Say 'Report created' after calling.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -122,7 +119,7 @@ Use this for ANY question about: patient name, age, medications, labs, test resu
         },
         {
             "name": "generate_patient_report",
-            "description": "Generate a comprehensive patient summary report including demographics, medical history, current medications, lab results, and clinical assessment.",
+            "description": "Generate patient report. Say 'Report created' after calling.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -131,7 +128,7 @@ Use this for ANY question about: patient name, age, medications, labs, test resu
         },
         {
             "name": "generate_legal_report",
-            "description": "Generate a legal compliance report documenting the patient's care, adverse events, and regulatory reporting requirements.",
+            "description": "Generate legal report. Say 'Report created' after calling.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -140,13 +137,13 @@ Use this for ANY question about: patient name, age, medications, labs, test resu
         },
         {
             "name": "create_schedule",
-            "description": "Create a scheduling panel on the board for patient follow-up appointments",
+            "description": "Create schedule. Say 'Scheduled' after calling.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "context": {
                         "type": "string",
-                        "description": "Description of what scheduling is needed, e.g., 'Follow-up for liver function tests in 2 weeks'"
+                        "description": "Scheduling context"
                     }
                 },
                 "required": ["context"]
@@ -154,13 +151,13 @@ Use this for ANY question about: patient name, age, medications, labs, test resu
         },
         {
             "name": "send_notification",
-            "description": "Send a notification alert to the care team about the patient",
+            "description": "Send notification. Say 'Sent' after calling.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "message": {
                         "type": "string",
-                        "description": "The notification message to send, e.g., 'Critical lab values require immediate review'"
+                        "description": "Notification message"
                     }
                 },
                 "required": ["message"]
@@ -168,104 +165,88 @@ Use this for ANY question about: patient name, age, medications, labs, test resu
         },
         {
             "name": "create_lab_results",
-            "description": "Create and display lab results on the patient's board. Use when the user says things like 'add labs', 'create lab results', 'add ALT 110', 'post these lab values'. Creates a lab panel showing the values.",
+            "description": """TRIGGER: User says "add labs" OR "create lab results" OR "post labs"
+ACTION: Call create_lab_results(labs=[]) IMMEDIATELY
+RESPONSE: Say ONLY "Done" - nothing else
+
+Example:
+User: "Add labs"
+YOU: [CALL create_lab_results with labs=[]] -> "Done"
+NOT: "I'll add the lab results..." or "Which labs..."
+
+CRITICAL: 
+- ALWAYS pass labs=[] (empty array)
+- Do NOT ask "which labs" or "what values"
+- System auto-extracts from patient data""",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "labs": {
                         "type": "array",
-                        "description": "Array of lab results. Each should have: name (string like 'ALT', 'AST', 'Bilirubin'), value (number), unit (string like 'U/L', 'mg/dL'), range (string like '7-56'), status ('high', 'low', or 'normal')",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "name": {"type": "string", "description": "Lab test name like ALT, AST, Bilirubin, INR, Albumin"},
-                                "value": {"type": "number", "description": "Numeric value of the lab result"},
-                                "unit": {"type": "string", "description": "Unit like U/L, mg/dL, g/dL"},
-                                "range": {"type": "string", "description": "Normal range like 7-56, 0.2-1.2"},
-                                "status": {"type": "string", "description": "Status: high, low, or normal"}
-                            },
-                            "required": ["name", "value"]
-                        }
-                    },
-                    "source": {
-                        "type": "string",
-                        "description": "Source of the lab results, defaults to 'Voice Agent'"
+                        "description": "ALWAYS empty: []",
+                        "items": {"type": "object"}
                     }
                 },
-                "required": ["labs"]
+                "required": []
             }
         },
         {
             "name": "create_agent_result",
-            "description": "Create and display a clinical analysis card on the board. Use when user says 'create analysis', 'add findings', 'display assessment', 'post a summary'. Shows formatted text on the board.",
+            "description": """TRIGGER: User says "create analysis" OR "add assessment" OR "generate findings"
+ACTION: Call create_agent_result() with NO arguments IMMEDIATELY  
+RESPONSE: Say ONLY "Done" - nothing else
+
+Example:
+User: "Create an analysis"
+YOU: [CALL create_agent_result with no parameters] -> "Done"
+NOT: "What should I include..." or "I'll create an analysis..."
+
+CRITICAL:
+- Do NOT pass title or content parameters
+- System auto-generates everything from patient data""",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "title": {
-                        "type": "string",
-                        "description": "Title for the analysis card, e.g., 'Lab Analysis', 'Clinical Assessment', 'Liver Function Summary'"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "The analysis content. Can include findings, assessments, recommendations. Will be displayed on the board."
-                    }
-                },
-                "required": ["title", "content"]
+                "properties": {},
+                "required": []
             }
         }
     ]
 
 def get_voice_system_instruction(patient_id: str, patient_summary: str = "") -> str:
-    """Get system instruction for voice mode"""
+    """Get system instruction for voice mode - uses the strict voice_agent_system.md"""
     try:
-        with open("system_prompts/chat_model_system.md", "r", encoding="utf-8") as f:
+        # Use the VOICE-SPECIFIC prompt, not chat_model_system.md
+        with open("system_prompts/voice_agent_system.md", "r", encoding="utf-8") as f:
             base_prompt = f.read()
     except:
-        base_prompt = "You are MedForce Agent, a clinical AI assistant."
+        base_prompt = """You are MedForce Voice Agent. CRITICAL RULES:
+1. MAX 1 SENTENCE responses
+2. "add labs" -> call create_lab_results(labs=[]) -> say "Done"
+3. "create analysis" -> call create_agent_result() -> say "Done"  
+4. Patient question -> call get_patient_data -> answer in 5 WORDS MAX
+5. "stop" -> say "Okay" ONLY"""
     
     context_section = ""
     if patient_summary:
         context_section = f"\n\n--- CURRENT PATIENT CONTEXT ---\n{patient_summary}\n"
     
-    return f"""{base_prompt}
+    # Add strict prefix before the main prompt
+    return f"""STRICT RULES - FAILURE TO FOLLOW = FAILURE:
+1. MAX 1 SENTENCE - SHORTER IS BETTER
+2. Patient question? Call get_patient_data, answer in 3 WORDS MAX
+3. "add labs"? Call create_lab_results(labs=[]), say "Done"
+4. "create analysis"? Call create_agent_result(), say "Done"
+5. "stop"? Say "Okay" ONLY
 
---- PATIENT-SPECIFIC INFO ---
-Current Patient ID: {patient_id}
+NEVER explain. NEVER elaborate. NEVER ask follow-ups.
+
+{base_prompt}
+
+--- CURRENT SESSION ---
+Patient ID: {patient_id}
 Board URL: https://iso-clinic-v3-481780815788.europe-west1.run.app/board/{patient_id}{context_section}
 
-CRITICAL VOICE MODE INSTRUCTIONS:
-
-1. SPEAKING STYLE:
-   - Speak at a SLOW, MEASURED PACE - take your time
-   - Pause briefly between sentences for clarity
-   - Use a calm, professional tone
-   - Keep responses to 2-4 sentences when possible
-
-2. TOOL USAGE (MANDATORY):
-   - ALWAYS call get_patient_data FIRST when asked about patient information
-   - This includes: name, age, medications, labs, diagnoses, allergies, history
-   - NEVER say "I don't have access" - USE THE TOOLS
-   - Patient ID for ALL tool calls: {patient_id}
-
-3. AVAILABLE TOOLS:
-   - get_patient_data: Get demographics, medications, labs, diagnoses, history
-   - focus_board_item: Navigate to specific board items 
-   - create_task: Create TODO tasks
-   - send_to_easl: Get clinical analysis from EASL guidelines
-   - generate_dili_diagnosis: Create DILI diagnosis report
-   - generate_patient_report: Create patient summary
-   - generate_legal_report: Create compliance report
-   - create_schedule: Schedule follow-up appointments
-   - send_notification: Alert care team
-   - create_lab_results: Add lab values to board
-   - create_agent_result: Add analysis cards to board
-
-4. INTERACTION FLOW:
-   - Greet briefly when session starts
-   - Listen carefully to questions
-   - Use tools to get accurate data
-   - Respond with the information requested
-   - Offer to help with related actions
+Remember: Use patient_id "{patient_id}" when calling any tools that need it.
 """
 
 class SessionStatus(Enum):
@@ -445,9 +426,9 @@ class VoiceSessionManager:
                     "automatic_activity_detection": {
                         "disabled": False,
                         "start_of_speech_sensitivity": "START_SENSITIVITY_LOW",
-                        "end_of_speech_sensitivity": "END_SENSITIVITY_HIGH",
-                        "prefix_padding_ms": 150,
-                        "silence_duration_ms": 700
+                        "end_of_speech_sensitivity": "END_SENSITIVITY_LOW",
+                        "prefix_padding_ms": 100,
+                        "silence_duration_ms": 800
                     }
                 }
             }

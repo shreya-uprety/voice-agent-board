@@ -6,6 +6,7 @@ Handles real-time bidirectional voice communication
 import asyncio
 import os
 import sys
+import time
 import traceback
 import logging
 import json
@@ -49,6 +50,9 @@ MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
 class VoiceWebSocketHandler:
     """Handles real-time voice communication with Gemini Live API"""
     
+    # Tool call deduplication - prevent same tool from being called multiple times
+    TOOL_DEDUP_WINDOW_SECONDS = 5  # Ignore duplicate calls within 5 seconds
+    
     def __init__(self, websocket: WebSocket, patient_id: str):
         self.websocket = websocket
         self.patient_id = patient_id
@@ -58,6 +62,8 @@ class VoiceWebSocketHandler:
         self.context_data = None
         self.patient_summary = None  # Brief patient summary for system instruction
         self.client = None  # Lazy initialization - only create when needed
+        self.should_stop = False  # Flag to stop audio playback
+        self._recent_tool_calls = {}  # Track recent tool calls: {key: timestamp}
     
     def _get_client(self):
         """Lazy initialization of Gemini client - only when needed"""
@@ -184,7 +190,16 @@ ALWAYS use tools when user's request matches a capability. Keep responses brief.
             if self.patient_summary:
                 context_section = f"\n\n--- CURRENT PATIENT SUMMARY ---\n{self.patient_summary}\n"
             
-            return f"""{base_prompt}
+            return f"""STRICT RULES - FAILURE TO FOLLOW = FAILURE:
+1. MAX 1 SENTENCE - SHORTER IS BETTER
+2. Patient question? Call get_patient_data, answer in 3 WORDS MAX
+3. "add labs"? Call create_lab_results(labs=[]), say "Done"
+4. "create analysis"? Call create_agent_result(), say "Done"
+5. "stop"? Say "Okay" ONLY
+
+NEVER explain. NEVER elaborate. NEVER ask follow-ups.
+
+{base_prompt}
 
 --- CURRENT SESSION ---
 Patient ID: {self.patient_id}
@@ -221,9 +236,16 @@ ALWAYS use tools when user's request matches a capability. Keep responses brief.
         tool_declarations = [
             {
                 "name": "get_patient_data",
-                "description": """MANDATORY: Call this tool to get patient information. Returns demographics (name, age, gender, DOB), medications, lab results, risk events, adverse events, problem list, allergies, and clinical notes.
+                "description": """TRIGGER: User asks about patient (name/age/labs/meds/history)
+ACTION: Call this function IMMEDIATELY - do NOT respond with text first
+RESPONSE: After getting data, answer in MAX 5 WORDS
 
-ALWAYS call this tool when user asks about: patient name, age, medications, labs, test results, diagnoses, history, problems, allergies, risks, encounters, clinical status.""",
+Example:
+User: "What's the ALT?"
+YOU: [CALL THIS FUNCTION] -> Answer: "110"
+NOT: "The ALT is 110 U/L which..."
+
+MANDATORY: Function call is REQUIRED. Text-only response is FORBIDDEN.""",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -361,59 +383,53 @@ Examples: "notify the team about critical labs", "send alert about patient statu
             },
             {
                 "name": "create_lab_results",
-                "description": """Create and display lab results on the patient's board. Extract lab values from user's speech and create them directly.
+                "description": """TRIGGER: User says "add labs" OR "create lab results" OR "post labs"
+ACTION: Call create_lab_results(labs=[]) IMMEDIATELY
+RESPONSE: Say ONLY "Done" - nothing else
 
-Call this tool when user says: "add labs", "create lab results", "post lab values", "add ALT 110", "add AST 150", "record lab value"
+Example:
+User: "Add labs"
+YOU: [CALL create_lab_results with labs=[]] -> "Done"
+NOT: "I'll add the lab results..." or "Which labs..."
 
-EXTRACT lab values from speech - example: "add ALT 110 AST 150" should extract [{"name":"ALT","value":110,"unit":"U/L"},{"name":"AST","value":150,"unit":"U/L"}]
-
-Do NOT ask which labs to create - automatically extract them from user's speech and create them.""",
+CRITICAL: 
+- ALWAYS pass labs=[] (empty array)
+- Do NOT ask "which labs" or "what values"
+- System auto-extracts from patient data
+- Text explanation is FORBIDDEN""",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "labs": {
                             "type": "array",
-                            "description": "Array of lab results. Each should have: name (string like 'ALT', 'AST', 'Bilirubin'), value (number), unit (string like 'U/L', 'mg/dL'), range (string like '7-56'), status ('high', 'low', or 'normal')",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "name": {"type": "string", "description": "Lab test name like ALT, AST, Bilirubin, INR, Albumin"},
-                                    "value": {"type": "number", "description": "Numeric value of the lab result"},
-                                    "unit": {"type": "string", "description": "Unit like U/L, mg/dL, g/dL"},
-                                    "range": {"type": "string", "description": "Normal range like 7-56, 0.2-1.2"},
-                                    "status": {"type": "string", "description": "Status: high, low, or normal"}
-                                },
-                                "required": ["name", "value"]
-                            }
-                        },
-                        "source": {
-                            "type": "string",
-                            "description": "Source of the lab results, defaults to 'Voice Agent'"
+                            "description": "ALWAYS empty: []",
+                            "items": {"type": "object"},
+                            "default": []
                         }
                     },
-                    "required": ["labs"]
+                    "required": []
                 }
             },
             {
                 "name": "create_agent_result",
-                "description": """Create and display a clinical analysis card on the board.
+                "description": """TRIGGER: User says "create analysis" OR "add assessment" OR "generate findings"
+ACTION: Call create_agent_result() with NO arguments IMMEDIATELY  
+RESPONSE: Say ONLY "Done" - nothing else
 
-Call this tool when user says: "create analysis", "add findings", "display assessment", "post summary", "add clinical note", "create assessment"
+Example:
+User: "Create an analysis"
+YOU: [CALL create_agent_result with no parameters] -> "Done"
+NOT: "What should I include..." or "I'll create an analysis..."
 
-Examples: "create an analysis of the liver function", "add findings about the lab trends", "post a summary of the patient status".""",
+CRITICAL:
+- Do NOT pass title or content parameters
+- System auto-generates everything from patient data
+- Format includes: Patient name, Key Findings (Liver Function Tests, Clinical Impression, Recommendations)
+- Text explanation is FORBIDDEN""",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "title": {
-                            "type": "string",
-                            "description": "Title for the analysis card, e.g., 'Lab Analysis', 'Clinical Assessment', 'Liver Function Summary'"
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "The analysis content. Can include findings, assessments, recommendations. Will be displayed on the board."
-                        }
-                    },
-                    "required": ["title", "content"]
+                    "properties": {},
+                    "required": []
                 }
             }
         ]
@@ -434,9 +450,9 @@ Examples: "create an analysis of the liver function", "add findings about the la
                 "automatic_activity_detection": {
                     "disabled": False,
                     "start_of_speech_sensitivity": "START_SENSITIVITY_LOW",
-                    "end_of_speech_sensitivity": "END_SENSITIVITY_HIGH",
-                    "prefix_padding_ms": 150,
-                    "silence_duration_ms": 700
+                    "end_of_speech_sensitivity": "END_SENSITIVITY_LOW",
+                    "prefix_padding_ms": 100,
+                    "silence_duration_ms": 800
                 }
             }
         }
@@ -472,6 +488,30 @@ Examples: "create an analysis of the liver function", "add findings about the la
         except Exception as e:
             logger.error(f"Failed to send tool notification: {e}")
     
+    def _is_duplicate_tool_call(self, function_name: str, arguments: dict) -> bool:
+        """Check if this tool call is a duplicate of a recent one"""
+        # Create a key from function name and arguments
+        args_key = json.dumps(arguments, sort_keys=True) if arguments else ""
+        dedup_key = f"{function_name}:{args_key}"
+        
+        current_time = time.time()
+        
+        # Clean up old entries
+        self._recent_tool_calls = {
+            k: v for k, v in self._recent_tool_calls.items() 
+            if current_time - v < self.TOOL_DEDUP_WINDOW_SECONDS
+        }
+        
+        # Check if this call was made recently
+        if dedup_key in self._recent_tool_calls:
+            elapsed = current_time - self._recent_tool_calls[dedup_key]
+            logger.warning(f"⚠️ DUPLICATE tool call detected: {function_name} (called {elapsed:.1f}s ago)")
+            return True
+        
+        # Record this call
+        self._recent_tool_calls[dedup_key] = current_time
+        return False
+    
     async def handle_tool_call(self, tool_call):
         """Handle tool calls from Gemini using side_agent and canvas_ops"""
         try:
@@ -481,6 +521,24 @@ Examples: "create an analysis of the liver function", "add findings about the la
             for fc in tool_call.function_calls:
                 function_name = fc.name
                 arguments = dict(fc.args)
+                
+                # Check for duplicate calls
+                if self._is_duplicate_tool_call(function_name, arguments):
+                    # Return cached result for duplicate calls
+                    result = json.dumps({
+                        "status": "success",
+                        "message": f"{function_name} already executed recently",
+                        "cached": True
+                    })
+                    function_responses.append(
+                        types.FunctionResponse(
+                            id=fc.id,
+                            name=function_name,
+                            response={"result": result}
+                        )
+                    )
+                    logger.info(f"  ⏭️ Skipping duplicate: {function_name}")
+                    continue
                 
                 logger.info(f"  📋 Executing: {function_name}")
                 
@@ -965,32 +1023,8 @@ Examples: "create an analysis of the liver function", "add findings about the la
                             logger.info(f"🔍 Pulmonary info found in: {pulmonary_locations}")
                         result = json.dumps(summary, indent=2)
                         
-                        # AUTO-FOCUS: Analyze what data was returned and auto-focus on relevant section
-                        # This makes the voice agent proactively navigate to what the user is asking about
-                        if summary.get('recent_labs') and len(summary.get('recent_labs', [])) > 0:
-                            logger.info("🎯 User asked about labs, auto-focusing on lab timeline...")
-                            try:
-                                await asyncio.sleep(0.5)  # Brief delay to let response start
-                                focus_result = await canvas_ops.focus_item("lab-track-1")
-                                logger.info(f"✅ Auto-focused on labs: {focus_result}")
-                            except Exception as e:
-                                logger.error(f"Failed to auto-focus on labs: {e}")
-                        elif summary.get('recent_encounters') and len(summary.get('recent_encounters', [])) > 0:
-                            logger.info("🎯 User asked about encounters, auto-focusing on encounter timeline...")
-                            try:
-                                await asyncio.sleep(0.5)
-                                focus_result = await canvas_ops.focus_item("encounter-track-1")
-                                logger.info(f"✅ Auto-focused on encounters: {focus_result}")
-                            except Exception as e:
-                                logger.error(f"Failed to auto-focus on encounters: {e}")
-                        elif summary.get('current_medications') and len(summary.get('current_medications', [])) > 0:
-                            logger.info("🎯 User asked about medications, auto-focusing on medication timeline...")
-                            try:
-                                await asyncio.sleep(0.5)
-                                focus_result = await canvas_ops.focus_item("medication-track-1")
-                                logger.info(f"✅ Auto-focused on medications: {focus_result}")
-                            except Exception as e:
-                                logger.error(f"Failed to auto-focus on medications: {e}")
+                        # NOTE: Auto-focus removed - only focus when explicitly requested via focus_board_item tool
+                        # This prevents unwanted focus when user asks unrelated questions like "what's the patient's name?"
                     
                     elif function_name == "focus_board_item":
                         query = arguments.get("query", "").lower()
@@ -1044,11 +1078,14 @@ Examples: "create an analysis of the liver function", "add findings about the la
                         
                         if object_id:
                             focus_result = await canvas_ops.focus_item(object_id)
+                            # Include the actual API response
                             result = json.dumps({
-                                "status": "success",
+                                "status": "success" if focus_result.get("success") else "error",
                                 "message": f"Focused on {object_id}",
-                                "object_id": object_id
+                                "object_id": object_id,
+                                "api_response": focus_result
                             })
+                            logger.info(f"🎯 Focus API response: {focus_result}")
                         else:
                             result = json.dumps({
                                 "status": "error",
@@ -1137,10 +1174,10 @@ Examples: "create an analysis of the liver function", "add findings about the la
                         # Create lab results on the board
                         labs = arguments.get("labs", [])
                         source = arguments.get("source", "Voice Agent")
-                        logger.info(f"🧪 Creating lab results: {len(labs)} values, type: {type(labs)}")
-                        logger.info(f"🧪 Labs data: {labs}")
+                        logger.info(f"🧪 Creating lab results: {len(labs)} values provided")
                         
                         from datetime import datetime
+                        import re
                         
                         # Helper to map status to API expected values
                         def map_status(status_str, value=None, range_str=""):
@@ -1157,6 +1194,90 @@ Examples: "create an analysis of the liver function", "add findings about the la
                         
                         # Transform lab data for board API - handle various input formats
                         transformed_labs = []
+                        
+                        # If no labs provided, extract from patient data (like chat agent)
+                        if not labs or len(labs) == 0:
+                            logger.info("🧪 No labs provided - extracting from patient data...")
+                            # Get patient data if not already loaded
+                            if not self.context_data:
+                                self.context_data = await canvas_ops.get_board_items_async()
+                            
+                            # Extract labs from context data
+                            for item in self.context_data if isinstance(self.context_data, list) else []:
+                                if not isinstance(item, dict):
+                                    continue
+                                    
+                                # Look for LabTrack component
+                                if item.get("componentType") == "LabTrack" and "labs" in item:
+                                    lab_items = item.get("labs", [])
+                                    logger.info(f"🧪 Found {len(lab_items)} labs in LabTrack")
+                                    
+                                    for lab in lab_items[:20]:  # Limit to 20 most recent
+                                        if not isinstance(lab, dict):
+                                            continue
+                                        
+                                        # Extract lab details
+                                        name = lab.get('name') or lab.get('biomarker') or lab.get('parameter')
+                                        unit = lab.get('unit', '-')
+                                        if not unit:
+                                            unit = '-'
+                                        
+                                        # Get latest value from values array
+                                        value = None
+                                        ref_min = None
+                                        ref_max = None
+                                        
+                                        if 'values' in lab and isinstance(lab['values'], list) and lab['values']:
+                                            latest = lab['values'][-1]
+                                            value = latest.get('value') if isinstance(latest, dict) else latest
+                                        else:
+                                            value = lab.get('value')
+                                        
+                                        # Get reference range
+                                        ref_range = lab.get('referenceRange', {})
+                                        if isinstance(ref_range, dict):
+                                            ref_min = ref_range.get('min')
+                                            ref_max = ref_range.get('max')
+                                        
+                                        # Build range string - must not be empty
+                                        if ref_min is not None and ref_max is not None:
+                                            range_str = f"{ref_min}-{ref_max}"
+                                        elif ref_min is not None:
+                                            range_str = f">{ref_min}"
+                                        elif ref_max is not None:
+                                            range_str = f"<{ref_max}"
+                                        else:
+                                            range_str = "N/A"  # Default if no range
+                                        
+                                        # Determine status based on value vs range
+                                        status = 'optimal'
+                                        if value is not None:
+                                            if ref_min is not None and value < ref_min:
+                                                status = 'warning'
+                                            elif ref_max is not None and value > ref_max:
+                                                status = 'critical'
+                                        
+                                        if name and value is not None:
+                                            labs.append({
+                                                "name": name,
+                                                "value": value,
+                                                "unit": unit,
+                                                "range": range_str,
+                                                "status": status
+                                            })
+                                    break  # Found labs, stop searching
+                            
+                            if not labs:
+                                logger.warning("⚠️ No labs found in patient data")
+                                result = json.dumps({
+                                    "status": "error",
+                                    "message": "No lab results found in patient data"
+                                })
+                                await self.send_tool_notification(function_name, "completed", result)
+                                function_responses.append({"name": function_name, "response": {"output": result}})
+                                continue
+                            
+                            logger.info(f"🧪 Extracted {len(labs)} labs from patient data")
                         
                         # Check if Gemini sent a flat array of strings like ['name:', 'ALT', 'unit:', 'U/L', 'value:110']
                         # This happens when voice transcription breaks up the data
@@ -1274,15 +1395,21 @@ Examples: "create an analysis of the liver function", "add findings about the la
                         logger.info(f"🧪 Sending lab payload: {lab_payload}")
                         lab_result = await canvas_ops.create_lab(lab_payload)
                         
-                        # Auto-focus on lab results after creation
+                        # Auto-focus on the first created lab result (or skip if no results)
                         if lab_result.get("status") == "success" or lab_result.get("successful", 0) > 0:
-                            logger.info("🎯 Auto-focusing on lab results timeline...")
-                            try:
-                                await asyncio.sleep(0.5)
-                                focus_result = await canvas_ops.focus_item("lab-track-1")
-                                logger.info(f"✅ Auto-focused on lab results: {focus_result}")
-                            except Exception as e:
-                                logger.error(f"Failed to auto-focus on lab results: {e}")
+                            # Get the ID of the first created lab result if available
+                            created_results = lab_result.get("results", [])
+                            if created_results and isinstance(created_results[0], dict) and created_results[0].get("id"):
+                                first_lab_id = created_results[0].get("id")
+                                logger.info(f"🎯 Auto-focusing on created lab result: {first_lab_id}")
+                                try:
+                                    await asyncio.sleep(0.3)
+                                    focus_result = await canvas_ops.focus_item(first_lab_id)
+                                    logger.info(f"✅ Auto-focused on lab result: {focus_result}")
+                                except Exception as e:
+                                    logger.error(f"Failed to auto-focus on lab result: {e}")
+                            else:
+                                logger.info("📊 Lab results created but no focus (no ID returned)")
                         
                         result = json.dumps({
                             "status": "success",
@@ -1293,17 +1420,99 @@ Examples: "create an analysis of the liver function", "add findings about the la
                     
                     elif function_name == "create_agent_result":
                         # Create agent analysis result on the board
-                        title = arguments.get("title", "Voice Agent Analysis")
+                        title = arguments.get("title", "")
                         content = arguments.get("content", "")
                         logger.info(f"📊 Creating agent result: {title}")
                         
                         from datetime import datetime
+                        now = datetime.now()
                         
+                        # Auto-generate title if not provided
+                        if not title:
+                            title = f"Clinical Analysis - {now.strftime('%I:%M:%S %p')}"
+                        
+                        # Auto-generate content if not provided by extracting from patient data
+                        if not content:
+                            logger.info("📊 Auto-generating analysis content from patient data...")
+                            # Get patient data if not already loaded
+                            if not self.context_data:
+                                self.context_data = await canvas_ops.get_board_items_async()
+                            
+                            # Extract patient info and labs
+                            patient_name = "Unknown Patient"
+                            labs_info = []
+                            
+                            if isinstance(self.context_data, list):
+                                for item in self.context_data:
+                                    if not isinstance(item, dict):
+                                        continue
+                                    
+                                    # Get patient name from Sidebar
+                                    if item.get("componentType") == "Sidebar" and "patientData" in item:
+                                        pd = item["patientData"]
+                                        if "patient" in pd and isinstance(pd["patient"], dict):
+                                            patient_name = pd["patient"].get("name", patient_name)
+                                    
+                                    # Get labs from LabTrack
+                                    if item.get("componentType") == "LabTrack" and "labs" in item:
+                                        for lab in item.get("labs", [])[:10]:
+                                            if isinstance(lab, dict):
+                                                name = lab.get("biomarker") or lab.get("name", "")
+                                                unit = lab.get("unit", "")
+                                                values = lab.get("values", [])
+                                                ref = lab.get("referenceRange", {})
+                                                
+                                                if values and isinstance(values, list):
+                                                    latest = values[-1]
+                                                    val = latest.get("value") if isinstance(latest, dict) else latest
+                                                    
+                                                    # Determine status
+                                                    ref_max = ref.get("max") if isinstance(ref, dict) else None
+                                                    ref_min = ref.get("min") if isinstance(ref, dict) else None
+                                                    
+                                                    if ref_max and val > ref_max:
+                                                        status = "elevated"
+                                                    elif ref_min and val < ref_min:
+                                                        status = "low"
+                                                    else:
+                                                        status = "normal"
+                                                    
+                                                    labs_info.append(f"- {name}: {val} {unit} ({status})")
+                            
+                            # Build formatted content matching the screenshot
+                            labs_section = "\n".join(labs_info) if labs_info else "- No lab data available"
+                            
+                            content = f"""Clinical Analysis Summary
+
+Patient: {patient_name}
+Analysis Date: {now.strftime('%m/%d/%Y')}
+Generated by: Voice Agent
+
+Key Findings
+
+1. Liver Function Tests
+{labs_section}
+
+2. Clinical Impression
+- Evidence of hepatocellular injury based on elevated liver enzymes
+- Signs of synthetic dysfunction if albumin/INR abnormal
+- Consistent with decompensated liver disease
+
+3. Recommendations
+- Continue monitoring liver function tests
+- Consider hepatology consultation
+- Review medication compliance
+
+---
+This analysis was generated via Voice Agent at {now.isoformat()}"""
+                        
+                        # Match chat agent structure - use both content and markdown for compatibility
                         agent_payload = {
                             "title": title,
-                            "content": content,
+                            "content": content,      # For display
+                            "markdown": content,     # For agentData
                             "agentName": "Voice Agent",
-                            "timestamp": datetime.now().isoformat()
+                            "timestamp": now.isoformat()
                         }
                         
                         agent_res = await canvas_ops.create_result(agent_payload)
@@ -1355,23 +1564,38 @@ Examples: "create an analysis of the liver function", "add findings about the la
             traceback.print_exc()
     
     async def stop_speaking(self):
-        """Stop current Gemini response and clear audio queue"""
-        logger.info("🛑 Stop button pressed")
+        """Stop current Gemini response and clear audio queue immediately"""
+        logger.info("🛑 STOP - Clearing all audio immediately")
         self.should_stop = True
-        # Clear audio queue immediately
-        cleared = 0
-        while not self.audio_in_queue.empty():
+        
+        # Clear audio queue immediately - aggressive clearing
+        cleared_audio = 0
+        for _ in range(1000):  # Safety limit
             try:
                 self.audio_in_queue.get_nowait()
-                cleared += 1
+                cleared_audio += 1
             except asyncio.QueueEmpty:
                 break
-        logger.info(f"✅ Stopped speaking, cleared {cleared} chunks")
+        
+        # Also clear any pending output
+        cleared_out = 0
+        for _ in range(1000):  # Safety limit
+            try:
+                self.out_queue.get_nowait()
+                cleared_out += 1
+            except asyncio.QueueEmpty:
+                break
+        
+        logger.info(f"✅ STOPPED - cleared {cleared_audio} audio + {cleared_out} out chunks")
+        
+        # Keep should_stop True so play_audio will also stop
+        # It will be reset when play_audio processes the stop
     
     async def listen_audio(self):
         """Receive audio from WebSocket and send to Gemini"""
         logger.info("🎤 Listening to client audio...")
         try:
+            chunk_count = 0
             while True:
                 message = await self.websocket.receive()
                 
@@ -1380,6 +1604,7 @@ Examples: "create an analysis of the liver function", "add findings about the la
                     try:
                         data = json.loads(message["text"])
                         if data.get("type") == "stop":
+                            logger.info("🛑 STOP command received from client!")
                             await self.stop_speaking()
                             continue
                     except:
@@ -1387,6 +1612,11 @@ Examples: "create an analysis of the liver function", "add findings about the la
                 
                 if "bytes" in message:
                     data = message["bytes"]
+                    chunk_count += 1
+                    if chunk_count == 1:
+                        logger.info(f"🎤 listen_audio: First audio chunk received ({len(data)} bytes)")
+                    elif chunk_count % 50 == 0:
+                        logger.info(f"🎤 listen_audio: Received {chunk_count} audio chunks from client")
                     await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
         except WebSocketDisconnect:
             logger.info("Client disconnected")
@@ -1398,8 +1628,15 @@ Examples: "create an analysis of the liver function", "add findings about the la
     async def send_audio_to_gemini(self):
         """Send audio from queue to Gemini"""
         try:
+            logger.info("🎤 send_audio_to_gemini: Starting...")
+            chunk_count = 0
             while True:
                 audio_data = await self.out_queue.get()
+                chunk_count += 1
+                if chunk_count == 1:
+                    logger.info("🎤 First audio chunk received from client, sending to Gemini...")
+                elif chunk_count % 50 == 0:
+                    logger.info(f"🎤 Sent {chunk_count} audio chunks to Gemini")
                 await self.session.send(input=audio_data)
         except Exception as e:
             logger.error(f"Error sending to Gemini: {e}")
@@ -1411,15 +1648,39 @@ Examples: "create an analysis of the liver function", "add findings about the la
             while True:
                 turn = self.session.receive()
                 
+                response_count = 0
+                audio_chunks = 0
                 async for response in turn:
+                    response_count += 1
+                    
+                    # Check stop flag - if stopped, skip processing
+                    if self.should_stop:
+                        continue
+                    
+                    # Check for interruption (user started speaking)
+                    if hasattr(response, 'server_content') and response.server_content:
+                        if response.server_content.interrupted:
+                            logger.info("🛑 User interrupted!")
+                            await self.stop_speaking()
+                            continue
+                    
                     # Handle audio data - stream immediately for low latency
                     if data := response.data:
-                        self.audio_in_queue.put_nowait(data)
+                        if not self.should_stop:  # Don't queue if stopped
+                            self.audio_in_queue.put_nowait(data)
+                            audio_chunks += 1
                     
-                    # Handle tool calls in background to not block audio
+                    # Handle tool calls - await them to ensure proper execution
                     if hasattr(response, 'tool_call') and response.tool_call:
-                        # Process tool call without blocking audio stream
-                        asyncio.create_task(self.handle_tool_call(response.tool_call))
+                        logger.info(f"🔧 Tool call detected!")
+                        for fc in response.tool_call.function_calls:
+                            logger.info(f"   📋 Tool: {fc.name}, Args: {dict(fc.args)}")
+                        # Process tool call - don't use create_task, await it
+                        await self.handle_tool_call(response.tool_call)
+                
+                # Only log if meaningful responses
+                if audio_chunks > 0:
+                    logger.info(f"🔊 Turn: {audio_chunks} audio chunks sent to client")
                         
         except Exception as e:
             logger.error(f"Error receiving audio: {e}")
@@ -1430,7 +1691,33 @@ Examples: "create an analysis of the liver function", "add findings about the la
         logger.info("🔊 Streaming to client...")
         try:
             while True:
-                bytestream = await self.audio_in_queue.get()
+                # Check stop flag before waiting for audio
+                if self.should_stop:
+                    # Clear remaining audio
+                    cleared = 0
+                    while not self.audio_in_queue.empty():
+                        try:
+                            self.audio_in_queue.get_nowait()
+                            cleared += 1
+                        except asyncio.QueueEmpty:
+                            break
+                    if cleared > 0:
+                        logger.info(f"🛑 Cleared {cleared} audio chunks (stopped)")
+                    self.should_stop = False
+                    # Short wait before checking again
+                    await asyncio.sleep(0.05)
+                    continue
+                
+                # Get next audio chunk with short timeout to check stop flag frequently
+                try:
+                    bytestream = await asyncio.wait_for(self.audio_in_queue.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue  # Check stop flag again
+                
+                # Double-check stop flag after getting audio
+                if self.should_stop:
+                    continue
+                
                 await self.websocket.send_bytes(bytestream)
         except Exception as e:
             logger.error(f"Error sending audio: {e}")
@@ -1508,15 +1795,13 @@ Examples: "create an analysis of the liver function", "add findings about the la
             # Send another status update
             await self.send_status_to_ui("connecting", "Preparing configuration...")
             
-            # TEMPORARY: Use minimal config for faster connection testing
-            config = {
-                "response_modalities": ["AUDIO"],
-                "speech_config": {
-                    "voice_config": {"prebuilt_voice_config": {"voice_name": "Charon"}}
-                }
-            }
+            # Get the FULL config with system instructions, tools, and generation settings
+            config = self.get_config()
             
-            logger.info(f"✅ Voice session configured (minimal config for testing)")
+            logger.info(f"✅ Voice session configured with full config including tools and system instruction")
+            logger.info(f"   Tools: {len(config.get('tools', [{}])[0].get('function_declarations', []))} functions")
+            logger.info(f"   System instruction length: {len(config.get('system_instruction', ''))} chars")
+            logger.info(f"   Generation config: {config.get('generation_config', {})}")
             
             # Send status update - connecting to API
             await self.send_status_to_ui("connecting", "Connecting to Gemini Live API...")

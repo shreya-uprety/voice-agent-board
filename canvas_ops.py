@@ -212,7 +212,7 @@ async def get_board_items_async(quiet=False, force_refresh=False):
 
 
 async def initiate_easl_iframe(question):
-    url = BASE_URL + "/api/send-to-easl"
+    url = BASE_URL + "/api/easl/send"
     payload = {
         "patientId": patient_manager.get_patient_id(),
         "query": question,
@@ -221,33 +221,38 @@ async def initiate_easl_iframe(question):
         }
     }
 
-    headers = {
-        "Content-Type": "application/json"
-    }
     with open(f"{config.output_dir}/initiate_iframe_payload.json", "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=4)
     
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=15)
-        print(f"Initiate EASL iframe: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            with open(f"{config.output_dir}/initiate_iframe_response.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-            return {
-                "status": "success",
-                "message": "Query sent to EASL iframe",
-                "api_response": data,
-                "query_sent": question[:500] + "..." if len(question) > 500 else question
-            }
-        else:
-            print(f"⚠️ EASL API returned {response.status_code}")
-            return {
-                "status": "error",
-                "message": f"EASL API returned {response.status_code}",
-                "query_sent": question[:500] + "..." if len(question) > 500 else question
-            }
+        # Use async aiohttp instead of sync requests for non-blocking API call
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                print(f"Initiate EASL iframe: {response.status}")
+                
+                response_text = await response.text()
+                
+                if response.status == 200:
+                    try:
+                        data = json.loads(response_text)
+                    except:
+                        data = {"raw": response_text}
+                    
+                    with open(f"{config.output_dir}/initiate_iframe_response.json", "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=4)
+                    return {
+                        "status": "success",
+                        "message": "Query sent to EASL iframe",
+                        "api_response": data,
+                        "query_sent": question[:500] + "..." if len(question) > 500 else question
+                    }
+                else:
+                    print(f"⚠️ EASL API returned {response.status}")
+                    return {
+                        "status": "error",
+                        "message": f"EASL API returned {response.status}",
+                        "query_sent": question[:500] + "..." if len(question) > 500 else question
+                    }
     except Exception as e:
         print(f"❌ Error sending to EASL: {e}")
         return {
@@ -354,24 +359,26 @@ async def create_todo(payload_body):
 
 async def update_todo(payload):
     """Update TODO status using POST /api/todos/update-status
-    Payload: {id, task_id, status, patientId}
-    - task_id: Use exact task_id from TODO response (e.g., "task-report-1")
-    - status: "executing" or "finished"
+    Payload: {id, index, status, patientId}
+    - index: Numeric index (0, 1, 2...) of the task in the todos array
+    - status: "todo", "executing", or "finished"
+    
+    For subtodo updates:
+    - index: "parent_index.subtodo_index" (e.g., "0.1" for first task's second subtodo)
     """
     url = BASE_URL + "/api/todos/update-status"
     
+    # Determine index from task_id or use provided index
+    index = payload.get("index")
+    if index is None:
+        index = payload.get("task_index", 0)  # Default to first task
+    
     update_payload = {
         "id": payload.get("id"),
-        "task_id": payload.get("task_id"),
+        "index": index,  # Numeric index or "parent.child" for subtodos
         "status": payload.get("status"),
         "patientId": patient_manager.get_patient_id()
     }
-    
-    # Add index for subtodo updates (use string format)
-    if "subtodo_index" in payload:
-        update_payload["index"] = str(payload.get("subtodo_index"))
-    else:
-        update_payload["index"] = ""
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=update_payload) as response:
@@ -407,23 +414,62 @@ async def create_lab(payload):
     results = []
     errors = []
     
+    def parse_range_to_object(range_val):
+        """Convert range string like '3.4-10.8' to object {'min': 3.4, 'max': 10.8}"""
+        if isinstance(range_val, dict):
+            return range_val  # Already an object
+        
+        if not range_val or range_val == "N/A" or not isinstance(range_val, str):
+            return {"min": 0, "max": 100}  # Default range
+        
+        range_str = str(range_val).strip()
+        
+        # Handle "min-max" format like "3.4-10.8"
+        if '-' in range_str:
+            parts = range_str.split('-')
+            if len(parts) == 2:
+                try:
+                    return {"min": float(parts[0]), "max": float(parts[1])}
+                except ValueError:
+                    pass
+        
+        # Handle ">min" format
+        if range_str.startswith('>'):
+            try:
+                return {"min": float(range_str[1:]), "max": 9999}
+            except ValueError:
+                pass
+        
+        # Handle "<max" format  
+        if range_str.startswith('<'):
+            try:
+                return {"min": 0, "max": float(range_str[1:])}
+            except ValueError:
+                pass
+        
+        return {"min": 0, "max": 100}  # Default fallback
+    
     async with aiohttp.ClientSession() as session:
-        for lab in lab_results:
+        for idx, lab in enumerate(lab_results):
             # Send each lab result with fields at top level
             unit = lab.get("unit")
             if not unit or unit == "":
                 unit = "-"  # Use dash for dimensionless values like INR
+            
+            # Convert range string to object
+            range_obj = parse_range_to_object(lab.get("range"))
             
             lab_payload = {
                 "parameter": lab.get("parameter"),
                 "value": lab.get("value"),
                 "unit": unit,
                 "status": lab.get("status"),
-                "range": lab.get("range"),
+                "range": range_obj,  # Now an object with min/max
                 "trend": lab.get("trend", "stable"),
                 "date": date,
                 "source": source,
-                "patientId": patient_id
+                "patientId": patient_id,
+                "index": idx  # Add index to help server order the results
             }
             
             # Validate all required fields are present
@@ -452,6 +498,10 @@ async def create_lab(payload):
                         print(f"  ❌ {error_msg}")
                         # Debug output for failures
                         print(f"     Payload: {json.dumps(lab_payload, indent=2)[:300]}")
+                        
+                # Small delay between requests to allow server to handle positioning
+                await asyncio.sleep(0.1)
+                
             except Exception as e:
                 error_msg = f"{lab.get('parameter')}: {str(e)}"
                 errors.append(error_msg)

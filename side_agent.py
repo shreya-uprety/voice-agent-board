@@ -228,60 +228,21 @@ async def prepare_easl_query(question: str):
 
 
 async def trigger_easl(question):
-    """Send clinical question to EASL with simple animated TODO progress"""
-    print("🚀 Starting EASL workflow...")
+    """Send clinical question to EASL - directly sends to iframe without TODO animation"""
+    print("🚀 Starting EASL workflow (direct send, no TODO)...")
     
-    # Create simple TODO workflow on board
-    easl_todo_payload = {
-        "title": "EASL Guideline Query",
-        "description": f"Processing: {question[:100]}...",
-        "todos": [
-            {
-                "id": "task-context",
-                "text": "Preparing clinical context",
-                "status": "pending",
-                "agent": "Context Agent"
-            },
-            {
-                "id": "task-query",
-                "text": "Sending query to EASL",
-                "status": "pending",
-                "agent": "EASL Agent"
-            }
-        ]
-    }
-    
-    # Create the TODO and start background animation
-    todo_obj = await canvas_ops.create_todo(easl_todo_payload)
-    todo_id = todo_obj.get('id')
-    
-    # Start background TODO animation (non-blocking)
-    asyncio.create_task(_animate_easl_todo(todo_id, question))
-    
-    return {
-        "status": "processing",
-        "message": "EASL query initiated - check board for progress",
-        "todo_id": todo_id,
-        "question": question
-    }
-
-
-async def _animate_easl_todo(todo_id: str, question: str):
-    """Background task to animate TODO and process EASL query with 2-second delays"""
     try:
-        # Phase 1: Context Generation (pending → executing → finished)
-        await asyncio.sleep(2)
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-context", "status": "executing"})
-        
         # Load prompts
         with open("system_prompts/context_agent.md", "r", encoding="utf-8") as f:
             SYSTEM_PROMPT_CONTEXT = f.read()
         with open("system_prompts/question_gen.md", "r", encoding="utf-8") as f:
             SYSTEM_PROMPT_QUESTION = f.read()
         
+        # Load EHR data
         ehr_data = await helper_model.load_ehr()
         
-        # Generate context
+        # Generate clinical context
+        print("📝 Generating clinical context...")
         model = genai.GenerativeModel(MODEL, system_instruction=SYSTEM_PROMPT_CONTEXT)
         prompt = f"Please generate context for: Question: {question}\n\nRaw data: {ehr_data}"
         resp = model.generate_content(prompt)
@@ -291,6 +252,7 @@ async def _animate_easl_todo(todo_id: str, question: str):
             f.write(context_result)
         
         # Generate refined question
+        print("📝 Generating refined question...")
         model = genai.GenerativeModel(MODEL, system_instruction=SYSTEM_PROMPT_QUESTION)
         prompt = f"Please generate proper question: Question: {question}\n\nRaw data: {ehr_data}"
         resp = model.generate_content(prompt)
@@ -299,32 +261,43 @@ async def _animate_easl_todo(todo_id: str, question: str):
         with open(f"{config.output_dir}/question.md", "w", encoding="utf-8") as f:
             f.write(q_gen_result)
         
-        await asyncio.sleep(2)
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-context", "status": "finished"})
-        
-        # Phase 2: Send to EASL (pending → executing → finished)
-        await asyncio.sleep(2)
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-query", "status": "executing"})
-        
-        # Send to EASL iframe
+        # Send to EASL iframe directly
         full_question = f"Context: {context_result}\n\nQuestion: {q_gen_result}"
+        print("📤 Sending query to EASL iframe...")
         easl_result = await canvas_ops.initiate_easl_iframe(full_question)
-        
-        await asyncio.sleep(2)
-        await canvas_ops.update_todo({"id": todo_id, "task_id": "task-query", "status": "finished"})
         
         # Focus on EASL iframe
         await canvas_ops.focus_item("iframe-item-easl-interface")
         
-        print(f"✅ EASL workflow completed")
+        print(f"✅ EASL query sent successfully")
+        
+        return {
+            "status": "success",
+            "message": "EASL query sent - check the EASL panel on the board",
+            "question": question,
+            "easl_result": easl_result
+        }
         
     except Exception as e:
         print(f"❌ EASL workflow error: {e}")
-        # Mark as failed but don't crash
-        try:
-            await canvas_ops.update_todo({"id": todo_id, "task_id": "task-query", "index": "", "status": "finished"})
-        except:
-            pass
+        return {
+            "status": "error",
+            "message": str(e),
+            "question": question
+        }
+
+
+# NOTE: _animate_easl_todo is deprecated - EASL now sends directly without TODO animation
+# Keeping the function commented out for reference if needed later
+# async def _animate_easl_todo(todo_id: str, question: str):
+#     """Background task to animate TODO and process EASL query with 2-second delays"""
+#     ... (deprecated)
+
+
+
+async def _do_nothing_placeholder():
+    """Placeholder to maintain code structure"""
+    pass
 
 
 # ============================================================================
@@ -405,20 +378,20 @@ async def _process_task_workflow(todo_json: dict, todo_obj: dict):
     try:
         todo_id = todo_obj.get("id")
         
-        for task in todo_json.get('todos', []):
+        for task_idx, task in enumerate(todo_json.get('todos', [])):
             task_id = task.get('id')
             
-            # Mark task as executing
-            await canvas_ops.update_todo({"id": todo_id, "task_id": task_id, "index": "", "status": "executing"})
+            # Mark task as executing (use numeric index)
+            await canvas_ops.update_todo({"id": todo_id, "index": task_idx, "status": "executing"})
             
-            # Process subtodos
-            for i, subtodo in enumerate(task.get('subTodos', [])):
+            # Process subtodos (use "parent.child" format)
+            for subtodo_idx, subtodo in enumerate(task.get('subTodos', [])):
                 await asyncio.sleep(random.uniform(0.3, 0.8))
-                await canvas_ops.update_todo({"id": todo_id, "task_id": task_id, "index": str(i), "status": "finished"})
+                await canvas_ops.update_todo({"id": todo_id, "index": f"{task_idx}.{subtodo_idx}", "status": "finished"})
             
             # Mark task as finished
             await asyncio.sleep(random.uniform(0.2, 0.5))
-            await canvas_ops.update_todo({"id": todo_id, "task_id": task_id, "index": "", "status": "finished"})
+            await canvas_ops.update_todo({"id": todo_id, "index": task_idx, "status": "finished"})
         
         # Generate response and post to board
         response_data = await generate_response(todo_json)
@@ -470,46 +443,43 @@ async def generate_todo(query: str):
 
 
 async def _animate_todo_tasks(todo_id: str, tasks: list):
-    """Background task to automatically update TODO task statuses with 2-second delays"""
+    """Background task to automatically update TODO task statuses with 2-second delays
+    Uses numeric index (0, 1, 2...) for tasks and "parent.child" format for subtodos
+    """
     try:
         print(f"🎭 Animation started for TODO {todo_id}")
-        for i, task in enumerate(tasks):
-            task_id = task.get('id')
-            if not task_id:
-                print(f"⚠️ Task {i} has no id, skipping")
-                continue
+        for task_idx, task in enumerate(tasks):
+            task_id = task.get('id', f'task-{task_idx}')
             
-            # Step 1: Mark parent task as executing
-            print(f"⏳ Task {task_id}: pending → executing")
+            # Step 1: Mark parent task as executing (use numeric index)
+            print(f"⏳ Task {task_idx} ({task_id}): pending → executing")
             await asyncio.sleep(2)
             await canvas_ops.update_todo({
                 "id": todo_id, 
-                "task_id": task_id, 
+                "index": task_idx, 
                 "status": "executing"
             })
             
             # Step 2: Animate all subtodos if they exist
             subtodos = task.get('subTodos', [])
             if subtodos:
-                print(f"  📋 Processing {len(subtodos)} subtodos for {task_id}")
-                for j, subtodo in enumerate(subtodos):
-                    # Mark subtodo as executing
-                    print(f"    ⏳ Subtodo {j}: pending → executing")
+                print(f"  📋 Processing {len(subtodos)} subtodos for task {task_idx}")
+                for subtodo_idx, subtodo in enumerate(subtodos):
+                    # Mark subtodo as executing (use "parent.child" format)
+                    print(f"    ⏳ Subtodo {task_idx}.{subtodo_idx}: pending → executing")
                     await asyncio.sleep(2)
                     await canvas_ops.update_todo({
                         "id": todo_id, 
-                        "task_id": task_id,
-                        "subtodo_index": j,
+                        "index": f"{task_idx}.{subtodo_idx}",
                         "status": "executing"
                     })
                     
                     # Mark subtodo as finished
-                    print(f"    ✅ Subtodo {j}: executing → finished")
+                    print(f"    ✅ Subtodo {task_idx}.{subtodo_idx}: executing → finished")
                     await asyncio.sleep(2)
                     await canvas_ops.update_todo({
                         "id": todo_id, 
-                        "task_id": task_id,
-                        "subtodo_index": j,
+                        "index": f"{task_idx}.{subtodo_idx}",
                         "status": "finished"
                     })
             else:
@@ -517,10 +487,10 @@ async def _animate_todo_tasks(todo_id: str, tasks: list):
                 await asyncio.sleep(2)
             
             # Step 3: Mark parent task as finished
-            print(f"✅ Task {task_id}: executing → finished")
+            print(f"✅ Task {task_idx} ({task_id}): executing → finished")
             await canvas_ops.update_todo({
                 "id": todo_id, 
-                "task_id": task_id, 
+                "index": task_idx, 
                 "status": "finished"
             })
             await asyncio.sleep(1)
