@@ -1023,8 +1023,37 @@ CRITICAL:
                             logger.info(f"🔍 Pulmonary info found in: {pulmonary_locations}")
                         result = json.dumps(summary, indent=2)
                         
-                        # NOTE: Auto-focus removed - only focus when explicitly requested via focus_board_item tool
-                        # This prevents unwanted focus when user asks unrelated questions like "what's the patient's name?"
+                        # Smart auto-focus: Check the QUERY keywords to focus on relevant section
+                        # Only focus if the query explicitly mentions that data type
+                        query_lower = arguments.get("query", "").lower() if "query" in arguments else ""
+                        
+                        if any(kw in query_lower for kw in ["lab", "labs", "lab result", "test result", "blood work", "bilirubin", "alt", "ast", "albumin"]):
+                            if summary.get('recent_labs') and len(summary.get('recent_labs', [])) > 0:
+                                logger.info("🎯 Query about labs detected, auto-focusing on lab timeline...")
+                                try:
+                                    await asyncio.sleep(0.3)
+                                    focus_result = await canvas_ops.focus_item("lab-track-1")
+                                    logger.info(f"✅ Auto-focused on labs: {focus_result}")
+                                except Exception as e:
+                                    logger.error(f"Failed to auto-focus on labs: {e}")
+                        elif any(kw in query_lower for kw in ["medication", "med", "drug", "prescription", "lactulose", "furosemide", "propranolol"]):
+                            if summary.get('current_medications') and len(summary.get('current_medications', [])) > 0:
+                                logger.info("🎯 Query about medications detected, auto-focusing on medication timeline...")
+                                try:
+                                    await asyncio.sleep(0.3)
+                                    focus_result = await canvas_ops.focus_item("medication-track-1")
+                                    logger.info(f"✅ Auto-focused on medications: {focus_result}")
+                                except Exception as e:
+                                    logger.error(f"Failed to auto-focus on medications: {e}")
+                        elif any(kw in query_lower for kw in ["encounter", "visit", "admission", "hospital"]):
+                            if summary.get('recent_encounters') and len(summary.get('recent_encounters', [])) > 0:
+                                logger.info("🎯 Query about encounters detected, auto-focusing on encounter timeline...")
+                                try:
+                                    await asyncio.sleep(0.3)
+                                    focus_result = await canvas_ops.focus_item("encounter-track-1")
+                                    logger.info(f"✅ Auto-focused on encounters: {focus_result}")
+                                except Exception as e:
+                                    logger.error(f"Failed to auto-focus on encounters: {e}")
                     
                     elif function_name == "focus_board_item":
                         query = arguments.get("query", "").lower()

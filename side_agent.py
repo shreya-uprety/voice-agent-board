@@ -381,17 +381,32 @@ async def _process_task_workflow(todo_json: dict, todo_obj: dict):
         for task_idx, task in enumerate(todo_json.get('todos', [])):
             task_id = task.get('id')
             
-            # Mark task as executing (use numeric index)
-            await canvas_ops.update_todo({"id": todo_id, "index": task_idx, "status": "executing"})
+            # Mark task as executing (include task_id and empty index)
+            await canvas_ops.update_todo({
+                "id": todo_id, 
+                "task_id": task_id,
+                "index": "",
+                "status": "executing"
+            })
             
-            # Process subtodos (use "parent.child" format)
+            # Process subtodos (include task_id with string index)
             for subtodo_idx, subtodo in enumerate(task.get('subTodos', [])):
                 await asyncio.sleep(random.uniform(0.3, 0.8))
-                await canvas_ops.update_todo({"id": todo_id, "index": f"{task_idx}.{subtodo_idx}", "status": "finished"})
+                await canvas_ops.update_todo({
+                    "id": todo_id, 
+                    "task_id": task_id,
+                    "index": str(subtodo_idx),
+                    "status": "finished"
+                })
             
             # Mark task as finished
             await asyncio.sleep(random.uniform(0.2, 0.5))
-            await canvas_ops.update_todo({"id": todo_id, "index": task_idx, "status": "finished"})
+            await canvas_ops.update_todo({
+                "id": todo_id, 
+                "task_id": task_id,
+                "index": "",
+                "status": "finished"
+            })
         
         # Generate response and post to board
         response_data = await generate_response(todo_json)
@@ -451,12 +466,13 @@ async def _animate_todo_tasks(todo_id: str, tasks: list):
         for task_idx, task in enumerate(tasks):
             task_id = task.get('id', f'task-{task_idx}')
             
-            # Step 1: Mark parent task as executing (use numeric index)
+            # Step 1: Mark parent task as executing (include task_id and empty index for parent)
             print(f"⏳ Task {task_idx} ({task_id}): pending → executing")
             await asyncio.sleep(2)
             await canvas_ops.update_todo({
                 "id": todo_id, 
-                "index": task_idx, 
+                "task_id": task_id,
+                "index": "",  # Empty string for parent task
                 "status": "executing"
             })
             
@@ -465,12 +481,13 @@ async def _animate_todo_tasks(todo_id: str, tasks: list):
             if subtodos:
                 print(f"  📋 Processing {len(subtodos)} subtodos for task {task_idx}")
                 for subtodo_idx, subtodo in enumerate(subtodos):
-                    # Mark subtodo as executing (use "parent.child" format)
+                    # Mark subtodo as executing (use string index)
                     print(f"    ⏳ Subtodo {task_idx}.{subtodo_idx}: pending → executing")
                     await asyncio.sleep(2)
                     await canvas_ops.update_todo({
                         "id": todo_id, 
-                        "index": f"{task_idx}.{subtodo_idx}",
+                        "task_id": task_id,
+                        "index": str(subtodo_idx),  # String index for subtodo
                         "status": "executing"
                     })
                     
@@ -479,7 +496,8 @@ async def _animate_todo_tasks(todo_id: str, tasks: list):
                     await asyncio.sleep(2)
                     await canvas_ops.update_todo({
                         "id": todo_id, 
-                        "index": f"{task_idx}.{subtodo_idx}",
+                        "task_id": task_id,
+                        "index": str(subtodo_idx),  # String index for subtodo
                         "status": "finished"
                     })
             else:
@@ -490,7 +508,8 @@ async def _animate_todo_tasks(todo_id: str, tasks: list):
             print(f"✅ Task {task_idx} ({task_id}): executing → finished")
             await canvas_ops.update_todo({
                 "id": todo_id, 
-                "index": task_idx, 
+                "task_id": task_id,
+                "index": "",  # Empty string for parent task
                 "status": "finished"
             })
             await asyncio.sleep(1)

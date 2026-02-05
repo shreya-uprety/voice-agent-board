@@ -1329,6 +1329,25 @@ Board URL: https://iso-clinic-v3-481780815788.europe-west1.run.app/board/{self.p
                             dict(part.function_call.args)
                         )
                         
+                        # Smart auto-focus after get_patient_data tool
+                        if part.function_call.name == "get_patient_data":
+                            tool_args = dict(part.function_call.args)
+                            query_lower = tool_args.get("query", "").lower() if "query" in tool_args else message.lower()
+                            
+                            # Check query keywords and auto-focus on relevant section
+                            try:
+                                if any(kw in query_lower for kw in ["lab", "labs", "lab result", "test result", "blood work", "bilirubin", "alt", "ast", "albumin"]):
+                                    logger.info("🎯 Query about labs detected, auto-focusing...")
+                                    asyncio.create_task(self.tool_executor.canvas_tools.focus_item("lab-track-1"))
+                                elif any(kw in query_lower for kw in ["medication", "med", "drug", "prescription", "lactulose", "furosemide", "propranolol"]):
+                                    logger.info("🎯 Query about medications detected, auto-focusing...")
+                                    asyncio.create_task(self.tool_executor.canvas_tools.focus_item("medication-track-1"))
+                                elif any(kw in query_lower for kw in ["encounter", "visit", "admission", "hospital"]):
+                                    logger.info("🎯 Query about encounters detected, auto-focusing...")
+                                    asyncio.create_task(self.tool_executor.canvas_tools.focus_item("encounter-track-1"))
+                            except Exception as e:
+                                logger.error(f"Auto-focus error: {e}")
+                        
                         # Ensure tool_result is a dict (wrap if needed)
                         if not isinstance(tool_result, dict):
                             tool_result = {"result": tool_result}

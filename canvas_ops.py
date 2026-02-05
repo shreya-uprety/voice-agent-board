@@ -359,23 +359,20 @@ async def create_todo(payload_body):
 
 async def update_todo(payload):
     """Update TODO status using POST /api/todos/update-status
-    Payload: {id, index, status, patientId}
-    - index: Numeric index (0, 1, 2...) of the task in the todos array
+    Payload: {id, task_id, index, status, patientId}
+    - task_id: Task ID from TODO response (e.g., "task-789")
+    - index: "" for parent task, "0" for subtodo (as string)
     - status: "todo", "executing", or "finished"
-    
-    For subtodo updates:
-    - index: "parent_index.subtodo_index" (e.g., "0.1" for first task's second subtodo)
     """
     url = BASE_URL + "/api/todos/update-status"
     
-    # Determine index from task_id or use provided index
-    index = payload.get("index")
-    if index is None:
-        index = payload.get("task_index", 0)  # Default to first task
+    # Get index - empty string "" for parent task, string number for subtodo
+    index = payload.get("index", "")
     
     update_payload = {
         "id": payload.get("id"),
-        "index": index,  # Numeric index or "parent.child" for subtodos
+        "task_id": payload.get("task_id"),
+        "index": str(index) if index != "" else "",  # Ensure string format
         "status": payload.get("status"),
         "patientId": patient_manager.get_patient_id()
     }
