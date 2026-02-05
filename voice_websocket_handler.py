@@ -51,7 +51,7 @@ class VoiceWebSocketHandler:
     """Handles real-time voice communication with Gemini Live API"""
     
     # Tool call deduplication - prevent same tool from being called multiple times
-    TOOL_DEDUP_WINDOW_SECONDS = 5  # Ignore duplicate calls within 5 seconds
+    TOOL_DEDUP_WINDOW_SECONDS = 10  # Ignore duplicate calls within 10 seconds
     
     def __init__(self, websocket: WebSocket, patient_id: str):
         self.websocket = websocket
@@ -237,20 +237,29 @@ ALWAYS use tools when user's request matches a capability. Keep responses brief.
         tool_declarations = [
             {
                 "name": "get_patient_data",
-                "description": """TRIGGER: User asks about patient (name/age/labs/meds/history)
-ACTION: Call this function IMMEDIATELY - do NOT respond with text first
+                "description": """TRIGGER: User asks about patient (name/age/labs/meds/history/encounters)
+ACTION: Call this function IMMEDIATELY with the query parameter filled in
 RESPONSE: After getting data, answer in MAX 5 WORDS
 
-Example:
-User: "What's the ALT?"
-YOU: [CALL THIS FUNCTION] -> Answer: "110"
-NOT: "The ALT is 110 U/L which..."
+CRITICAL: You MUST pass the 'query' parameter describing what user asked about.
+Use keywords: labs, medications, encounters, patient, profile, risk, history
 
-MANDATORY: Function call is REQUIRED. Text-only response is FORBIDDEN.""",
+Examples:
+- User: "What's the ALT?" -> query="lab ALT level"
+- User: "What medications?" -> query="medications"
+- User: "Latest encounter?" -> query="latest encounter"
+- User: "Patient name?" -> query="patient name"
+
+MANDATORY: Function call with query parameter is REQUIRED.""",
                 "parameters": {
                     "type": "object",
-                    "properties": {},
-                    "required": []
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "REQUIRED: Describe what the user is asking about. Must include one of: labs, medications, encounters, patient, profile, risk, history. Example: 'lab results', 'latest encounter', 'current medications', 'patient age'"
+                        }
+                    },
+                    "required": ["query"]
                 }
             },
             {
@@ -1107,57 +1116,12 @@ CRITICAL:
                             logger.info(f"📤 Key events: {summary['key_events'][:2]}")
                         
                         if pulmonary_locations:
-                            logger.info(f"🔍 Pulmonary info found in: {pulmonary_locations}")
+                            logger.info(f"🔍 Pulmonary info found in: {pulmonary_locations[:3]}")  # Limit output
                         result = json.dumps(summary, indent=2)
-                        
-                        # Smart auto-focus: Check the QUERY keywords to focus on relevant section
-                        # Use last_user_query as fallback when query argument is empty (like chat agent)
-                        query_lower = arguments.get("query", "").lower() if "query" in arguments else self.last_user_query.lower()
 
-                        if any(kw in query_lower for kw in ["lab", "labs", "lab result", "test result", "blood work", "bilirubin", "alt", "ast", "albumin", "liver function", "lft", "blood test"]):
-                            if summary.get('recent_labs') and len(summary.get('recent_labs', [])) > 0:
-                                logger.info("🎯 Query about labs detected, auto-focusing on lab timeline...")
-                                try:
-                                    await asyncio.sleep(0.3)
-                                    focus_result = await canvas_ops.focus_item("lab-track-1")
-                                    logger.info(f"✅ Auto-focused on labs: {focus_result}")
-                                except Exception as e:
-                                    logger.error(f"Failed to auto-focus on labs: {e}")
-                        elif any(kw in query_lower for kw in ["medication", "med", "drug", "prescription", "lactulose", "furosemide", "propranolol", "medicine", "rx", "dosage"]):
-                            if summary.get('current_medications') and len(summary.get('current_medications', [])) > 0:
-                                logger.info("🎯 Query about medications detected, auto-focusing on medication timeline...")
-                                try:
-                                    await asyncio.sleep(0.3)
-                                    focus_result = await canvas_ops.focus_item("medication-track-1")
-                                    logger.info(f"✅ Auto-focused on medications: {focus_result}")
-                                except Exception as e:
-                                    logger.error(f"Failed to auto-focus on medications: {e}")
-                        elif any(kw in query_lower for kw in ["encounter", "visit", "admission", "hospital", "appointment", "clinic"]):
-                            if summary.get('recent_encounters') and len(summary.get('recent_encounters', [])) > 0:
-                                logger.info("🎯 Query about encounters detected, auto-focusing on encounter timeline...")
-                                try:
-                                    await asyncio.sleep(0.3)
-                                    focus_result = await canvas_ops.focus_item("encounter-track-1")
-                                    logger.info(f"✅ Auto-focused on encounters: {focus_result}")
-                                except Exception as e:
-                                    logger.error(f"Failed to auto-focus on encounters: {e}")
-                        elif any(kw in query_lower for kw in ["risk", "adverse", "event", "complication", "danger", "warning"]):
-                            if summary.get('risk_events') or summary.get('key_events'):
-                                logger.info("🎯 Query about risks/events detected, auto-focusing on risk timeline...")
-                                try:
-                                    await asyncio.sleep(0.3)
-                                    focus_result = await canvas_ops.focus_item("risk-track-1")
-                                    logger.info(f"✅ Auto-focused on risks: {focus_result}")
-                                except Exception as e:
-                                    logger.error(f"Failed to auto-focus on risks: {e}")
-                        elif any(kw in query_lower for kw in ["patient", "profile", "demographic", "age", "name", "history", "who is"]):
-                            logger.info("🎯 Query about patient profile detected, auto-focusing on sidebar...")
-                            try:
-                                await asyncio.sleep(0.3)
-                                focus_result = await canvas_ops.focus_item("sidebar-1")
-                                logger.info(f"✅ Auto-focused on patient profile: {focus_result}")
-                            except Exception as e:
-                                logger.error(f"Failed to auto-focus on patient profile: {e}")
+                        # NOTE: Auto-focus is now handled by the model calling focus_board_item explicitly
+                        # (see system prompt instruction to call focus_board_item after get_patient_data)
+                        logger.info("ℹ️ get_patient_data completed - model will call focus_board_item next")
                     
                     elif function_name == "focus_board_item":
                         query = arguments.get("query", "").lower()
