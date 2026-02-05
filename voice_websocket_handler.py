@@ -1718,14 +1718,38 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
         # Keep should_stop True so play_audio will also stop
         # It will be reset when play_audio processes the stop
     
-    async def listen_audio(self):
-        """Receive audio from WebSocket and send to Gemini"""
-        logger.info("🎤 Listening to client audio...")
+    def _calculate_audio_energy(self, audio_bytes: bytes) -> float:
+        """Calculate RMS energy of audio chunk for voice activity detection"""
+        import struct
         try:
-            chunk_count = 0
+            # Assume 16-bit PCM audio
+            samples = struct.unpack(f'{len(audio_bytes)//2}h', audio_bytes)
+            if not samples:
+                return 0.0
+            # Calculate RMS energy
+            sum_squares = sum(s * s for s in samples)
+            rms = (sum_squares / len(samples)) ** 0.5
+            return rms
+        except:
+            return 0.0
+
+    async def listen_audio(self):
+        """Receive audio from WebSocket and send to Gemini with VAD filtering"""
+        logger.info("🎤 Listening to client audio...")
+
+        # Voice Activity Detection settings
+        VAD_THRESHOLD = 500  # RMS threshold for speech detection (adjust as needed)
+        SILENCE_FRAMES_TO_SEND = 5  # Send a few silence frames after speech ends
+
+        silence_count = 0
+        speech_detected = False
+        chunk_count = 0
+        sent_count = 0
+
+        try:
             while True:
                 message = await self.websocket.receive()
-                
+
                 # Check for stop command
                 if "text" in message:
                     try:
@@ -1736,15 +1760,37 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
                             continue
                     except:
                         pass
-                
+
                 if "bytes" in message:
                     data = message["bytes"]
                     chunk_count += 1
+
+                    # Calculate audio energy for VAD
+                    energy = self._calculate_audio_energy(data)
+
+                    if energy > VAD_THRESHOLD:
+                        # Speech detected - send audio
+                        speech_detected = True
+                        silence_count = 0
+                        sent_count += 1
+                        await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
+                    elif speech_detected:
+                        # Speech was detected recently - send trailing silence
+                        silence_count += 1
+                        if silence_count <= SILENCE_FRAMES_TO_SEND:
+                            sent_count += 1
+                            await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
+                        else:
+                            # End of speech - reset
+                            speech_detected = False
+                            silence_count = 0
+                    # Else: silence before speech - skip
+
                     if chunk_count == 1:
                         logger.info(f"🎤 listen_audio: First audio chunk received ({len(data)} bytes)")
-                    elif chunk_count % 50 == 0:
-                        logger.info(f"🎤 listen_audio: Received {chunk_count} audio chunks from client")
-                    await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
+                    elif chunk_count % 100 == 0:
+                        logger.info(f"🎤 VAD: {chunk_count} received, {sent_count} sent ({100*sent_count//chunk_count}% passed VAD)")
+
         except WebSocketDisconnect:
             logger.info("Client disconnected")
             raise asyncio.CancelledError()
@@ -1831,20 +1877,19 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
                     if cleared > 0:
                         logger.info(f"🛑 Cleared {cleared} audio chunks (stopped)")
                     self.should_stop = False
-                    # Short wait before checking again
                     await asyncio.sleep(0.05)
                     continue
-                
+
                 # Get next audio chunk with short timeout to check stop flag frequently
                 try:
                     bytestream = await asyncio.wait_for(self.audio_in_queue.get(), timeout=0.1)
                 except asyncio.TimeoutError:
                     continue  # Check stop flag again
-                
+
                 # Double-check stop flag after getting audio
                 if self.should_stop:
                     continue
-                
+
                 await self.websocket.send_bytes(bytestream)
         except Exception as e:
             logger.error(f"Error sending audio: {e}")
