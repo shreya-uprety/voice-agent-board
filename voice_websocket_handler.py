@@ -65,6 +65,8 @@ class VoiceWebSocketHandler:
         self.should_stop = False  # Flag to stop audio playback
         self._recent_tool_calls = {}  # Track recent tool calls: {key: timestamp}
         self.last_user_query = ""  # Track last user query for auto-focus fallback
+        self._last_response_time = 0  # Track when last response was sent
+        self._response_cooldown_seconds = 3  # Cooldown before accepting new queries
     
     def _get_client(self):
         """Lazy initialization of Gemini client - only when needed"""
@@ -237,20 +239,22 @@ ALWAYS use tools when user's request matches a capability. Keep responses brief.
         tool_declarations = [
             {
                 "name": "get_patient_data",
-                "description": """TRIGGER: User asks about patient (name/age/labs/meds/history/encounters)
-ACTION: Call this function IMMEDIATELY with the query parameter filled in
-RESPONSE: After getting data, answer in MAX 5 WORDS
+                "description": """USE THIS TOOL when user ASKS any question about patient data.
 
-CRITICAL: You MUST pass the 'query' parameter describing what user asked about.
-Use keywords: labs, medications, encounters, patient, profile, risk, history
+TRIGGER WORDS: "What", "Show", "Tell", "How", "Who", "Which", any question mark
 
-Examples:
-- User: "What's the ALT?" -> query="lab ALT level"
-- User: "What medications?" -> query="medications"
-- User: "Latest encounter?" -> query="latest encounter"
-- User: "Patient name?" -> query="patient name"
+✅ USE THIS TOOL FOR:
+- "What are the lab values?" - YES, use this
+- "What are the labs?" - YES, use this
+- "What's the ALT?" - YES, use this
+- "Show me lab results" - YES, use this
+- "Tell me the labs" - YES, use this
+- "What medications?" - YES, use this
+- "Patient name?" - YES, use this
 
-MANDATORY: Function call with query parameter is REQUIRED.""",
+RESPONSE: Answer in MAX 5 WORDS with the actual values.
+
+⚠️ CRITICAL: Any question about labs = use THIS tool, not create_lab_results.""",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -392,29 +396,19 @@ Examples: "notify the team about critical labs", "send alert about patient statu
                 }
             },
             {
-                "name": "create_lab_results",
-                "description": """TRIGGER: User says "add labs" OR "create lab results" OR "post labs"
-ACTION: Call create_lab_results(labs=[]) IMMEDIATELY
-RESPONSE: Say ONLY "Done" - nothing else
+                "name": "add_results_panel",
+                "description": """Add a panel showing test results to the board.
 
-Example:
-User: "Add labs"
-YOU: [CALL create_lab_results with labs=[]] -> "Done"
-NOT: "I'll add the lab results..." or "Which labs..."
+ONLY use when user says: "Add labs", "Post labs", "Create labs panel", "Put labs on board"
 
-CRITICAL: 
-- ALWAYS pass labs=[] (empty array)
-- Do NOT ask "which labs" or "what values"
-- System auto-extracts from patient data
-- Text explanation is FORBIDDEN""",
+User must say "add" or "post" or "put" - this is for ADDING to board, not answering questions.""",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "labs": {
-                            "type": "array",
-                            "description": "ALWAYS empty: []",
-                            "items": {"type": "object"},
-                            "default": []
+                        "panel_type": {
+                            "type": "string",
+                            "description": "Type of panel: 'labs'",
+                            "default": "labs"
                         }
                     },
                     "required": []
@@ -608,11 +602,11 @@ CRITICAL:
         try:
             logger.info("🔧 Tool call detected")
             function_responses = []
-            
+
             for fc in tool_call.function_calls:
                 function_name = fc.name
                 arguments = dict(fc.args)
-                
+
                 # Check for duplicate calls
                 if self._is_duplicate_tool_call(function_name, arguments):
                     # Return cached result for duplicate calls
@@ -1297,7 +1291,7 @@ CRITICAL:
                             "api_response": notif_result.get("api_response")
                         })
                     
-                    elif function_name == "create_lab_results":
+                    elif function_name == "create_lab_results" or function_name == "add_results_panel":
                         # Create lab results on the board
                         labs = arguments.get("labs", [])
                         source = arguments.get("source", "Voice Agent")
@@ -1685,7 +1679,7 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
             
             # Send responses back to Gemini - use correct Live API method
             await self.session.send(input={"function_responses": function_responses})
-            
+
         except Exception as e:
             logger.error(f"Tool execution error: {e}")
             traceback.print_exc()

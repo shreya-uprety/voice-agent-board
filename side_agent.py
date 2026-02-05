@@ -77,8 +77,12 @@ def parse_tool(query):
         return {"query": query, "tool": "create_schedule"}
     if any(kw in q_lower for kw in ['notify', 'notification', 'alert', 'send message']):
         return {"query": query, "tool": "send_notification"}
-    if any(kw in q_lower for kw in ['lab result', 'lab value', 'add lab', 'create lab', 'post lab', 'blood test', 'liver function', 'lft']):
+    # ONLY create labs when user explicitly says "add" or "create" or "post"
+    if any(kw in q_lower for kw in ['add lab', 'create lab', 'post lab', 'put lab']):
         return {"query": query, "tool": "create_lab_results"}
+    # Questions about lab values should be handled as general queries (answered, not created)
+    if any(kw in q_lower for kw in ['lab result', 'lab value', 'blood test', 'liver function', 'lft', 'what are the lab', 'show lab', 'tell me the lab']):
+        return {"query": query, "tool": "general"}
     if any(kw in q_lower for kw in ['diagnosis', 'dili diagnosis', 'liver injury diagnosis']):
         return {"query": query, "tool": "generate_diagnosis"}
     if any(kw in q_lower for kw in ['patient report', 'summary report', 'generate report']):
