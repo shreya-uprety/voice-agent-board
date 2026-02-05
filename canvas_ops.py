@@ -1,6 +1,7 @@
 import requests
 import json
 import time
+import asyncio
 import aiohttp
 import helper_model
 import os
@@ -205,6 +206,11 @@ def get_board_items(quiet=False, force_refresh=False):
     return []
 
 
+async def get_board_items_async(quiet=False, force_refresh=False):
+    """Async wrapper for get_board_items - runs sync version in thread pool to avoid blocking"""
+    return await asyncio.to_thread(get_board_items, quiet, force_refresh)
+
+
 async def initiate_easl_iframe(question):
     url = BASE_URL + "/api/send-to-easl"
     payload = {
@@ -275,21 +281,35 @@ async def get_agent_answer(todo):
 
 
 async def focus_item(item_id):
-
+    """Focus on a board item by ID with proper animation and highlighting"""
     url = BASE_URL + "/api/focus"
     payload = {
         "patientId": patient_manager.get_patient_id(),
         "objectId": item_id,
         "focusOptions": {
-            "zoom": 0.5
+            "zoom": 0.8,
+            "highlight": True,
+            "duration": 1200,
+            "scrollIntoView": True
         }
     }
-    print("Focus URL:",url)
+    print(f"🎯 Focus URL: {url}")
+    print(f"🎯 Focus payload: {json.dumps(payload)}")
+    
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload) as response:
             with open(f"{config.output_dir}/focus_payload.json", "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=4)
-            data = await response.json()
+            
+            response_text = await response.text()
+            print(f"🎯 Focus response status: {response.status}")
+            print(f"🎯 Focus response: {response_text[:200]}")
+            
+            try:
+                data = json.loads(response_text)
+            except:
+                data = {"raw": response_text}
+            
             with open(f"{config.output_dir}/focus_response.json", "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
             return data

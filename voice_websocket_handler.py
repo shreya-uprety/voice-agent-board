@@ -92,7 +92,7 @@ class VoiceWebSocketHandler:
             # Load patient context using canvas_ops but DON'T put in system instruction
             # It's too large and causes context window errors
             if not self.context_data:
-                self.context_data = canvas_ops.get_board_items()
+                self.context_data = await canvas_ops.get_board_items_async()
             
             # Add patient-specific context to the voice prompt
             full_instruction = f"""{base_prompt}
@@ -361,11 +361,13 @@ Examples: "notify the team about critical labs", "send alert about patient statu
             },
             {
                 "name": "create_lab_results",
-                "description": """Create and display lab results on the patient's board.
+                "description": """Create and display lab results on the patient's board. Extract lab values from user's speech and create them directly.
 
-Call this tool when user says: "add labs", "create lab results", "post lab values", "add ALT", "add AST", "record these lab values"
+Call this tool when user says: "add labs", "create lab results", "post lab values", "add ALT 110", "add AST 150", "record lab value"
 
-Examples: "add ALT 110 and AST 150", "create lab results for today", "add bilirubin 2.5".""",
+EXTRACT lab values from speech - example: "add ALT 110 AST 150" should extract [{"name":"ALT","value":110,"unit":"U/L"},{"name":"AST","value":150,"unit":"U/L"}]
+
+Do NOT ask which labs to create - automatically extract them from user's speech and create them.""",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -490,7 +492,7 @@ Examples: "create an analysis of the liver function", "add findings about the la
                     if function_name == "get_patient_data":
                         # Load full context if not already loaded
                         if not self.context_data:
-                            self.context_data = canvas_ops.get_board_items()
+                            self.context_data = await canvas_ops.get_board_items_async()
                         
                         logger.info(f"📊 Context data type: {type(self.context_data)}, length: {len(self.context_data) if isinstance(self.context_data, (list, dict)) else 'N/A'}")
                         
@@ -962,17 +964,96 @@ Examples: "create an analysis of the liver function", "add findings about the la
                         if pulmonary_locations:
                             logger.info(f"🔍 Pulmonary info found in: {pulmonary_locations}")
                         result = json.dumps(summary, indent=2)
+                        
+                        # AUTO-FOCUS: Analyze what data was returned and auto-focus on relevant section
+                        # This makes the voice agent proactively navigate to what the user is asking about
+                        if summary.get('recent_labs') and len(summary.get('recent_labs', [])) > 0:
+                            logger.info("🎯 User asked about labs, auto-focusing on lab timeline...")
+                            try:
+                                await asyncio.sleep(0.5)  # Brief delay to let response start
+                                focus_result = await canvas_ops.focus_item("lab-track-1")
+                                logger.info(f"✅ Auto-focused on labs: {focus_result}")
+                            except Exception as e:
+                                logger.error(f"Failed to auto-focus on labs: {e}")
+                        elif summary.get('recent_encounters') and len(summary.get('recent_encounters', [])) > 0:
+                            logger.info("🎯 User asked about encounters, auto-focusing on encounter timeline...")
+                            try:
+                                await asyncio.sleep(0.5)
+                                focus_result = await canvas_ops.focus_item("encounter-track-1")
+                                logger.info(f"✅ Auto-focused on encounters: {focus_result}")
+                            except Exception as e:
+                                logger.error(f"Failed to auto-focus on encounters: {e}")
+                        elif summary.get('current_medications') and len(summary.get('current_medications', [])) > 0:
+                            logger.info("🎯 User asked about medications, auto-focusing on medication timeline...")
+                            try:
+                                await asyncio.sleep(0.5)
+                                focus_result = await canvas_ops.focus_item("medication-track-1")
+                                logger.info(f"✅ Auto-focused on medications: {focus_result}")
+                            except Exception as e:
+                                logger.error(f"Failed to auto-focus on medications: {e}")
                     
                     elif function_name == "focus_board_item":
-                        query = arguments.get("query", "")
-                        # Use side_agent to resolve object_id
-                        context = json.dumps(self.context_data) if self.context_data else "{}"
-                        object_id = await side_agent.resolve_object_id(query, context)
+                        query = arguments.get("query", "").lower()
+                        logger.info(f"🎯 Focus request: {query}")
+                        
+                        # Map common queries to actual board item IDs (not component types)
+                        focus_map = {
+                            "lab": "lab-track-1",
+                            "labs": "lab-track-1",
+                            "lab result": "lab-track-1",
+                            "lab results": "lab-track-1",
+                            "lab timeline": "lab-track-1",
+                            "lab chart": "dashboard-item-lab-chart",
+                            "lab table": "dashboard-item-lab-table",
+                            "medication": "medication-track-1",
+                            "medications": "medication-track-1",
+                            "meds": "medication-track-1",
+                            "medication timeline": "medication-track-1",
+                            "encounter": "encounter-track-1",
+                            "encounters": "encounter-track-1",
+                            "visit": "encounter-track-1",
+                            "visits": "encounter-track-1",
+                            "risk": "risk-track-1",
+                            "risks": "risk-track-1",
+                            "event": "key-events-track-1",
+                            "events": "key-events-track-1",
+                            "key events": "key-events-track-1",
+                            "patient": "sidebar-1",
+                            "profile": "sidebar-1",
+                            "sidebar": "sidebar-1",
+                            "adverse": "adverse-event-analytics",
+                            "diagnosis": "differential-diagnosis",
+                        }
+                        
+                        # Try direct mapping first
+                        object_id = None
+                        for key, item_id in focus_map.items():
+                            if key in query:
+                                object_id = item_id
+                                logger.info(f"✅ Mapped '{query}' to {object_id}")
+                                break
+                        
+                        # If no direct mapping, use side_agent to resolve
+                        if not object_id:
+                            context = json.dumps(self.context_data) if self.context_data else "{}"
+                            resolve_result = await side_agent.resolve_object_id(query, context)
+                            if isinstance(resolve_result, dict):
+                                object_id = resolve_result.get("object_id")
+                            else:
+                                object_id = resolve_result
+                        
                         if object_id:
-                            await canvas_ops.focus_item(object_id)
-                            result = f"Focused on {object_id}"
+                            focus_result = await canvas_ops.focus_item(object_id)
+                            result = json.dumps({
+                                "status": "success",
+                                "message": f"Focused on {object_id}",
+                                "object_id": object_id
+                            })
                         else:
-                            result = "Could not find matching board item"
+                            result = json.dumps({
+                                "status": "error",
+                                "message": "Could not find matching board item"
+                            })
                     
                     elif function_name == "create_task":
                         query = arguments.get("query", "")
@@ -1010,6 +1091,17 @@ Examples: "create an analysis of the liver function", "add findings about the la
                         # Generate legal report
                         logger.info("⚖️ Generating legal report...")
                         legal_result = await side_agent.create_legal_doc()
+                        
+                        # Auto-focus on the newly created legal report
+                        logger.info("🎯 Auto-focusing on legal report...")
+                        try:
+                            # Try to focus on the AgentResult that was just created
+                            await asyncio.sleep(1)  # Give it a moment to be created
+                            focus_result = await canvas_ops.focus_item("AgentResult")
+                            logger.info(f"✅ Auto-focused on legal report: {focus_result}")
+                        except Exception as e:
+                            logger.error(f"Failed to auto-focus on legal report: {e}")
+                        
                         result = json.dumps({
                             "status": "success",
                             "message": "Legal compliance report generated and added to board",
@@ -1017,14 +1109,17 @@ Examples: "create an analysis of the liver function", "add findings about the la
                         })
                     
                     elif function_name == "create_schedule":
-                        # Create schedule panel
+                        # Create schedule panel using side_agent for proper structure
                         context = arguments.get("context", "Follow-up appointment scheduling")
                         logger.info(f"📅 Creating schedule: {context}")
-                        schedule_result = await canvas_ops.create_schedule({"schedulingContext": context})
+                        
+                        # Use side_agent.create_schedule which generates proper scheduling structure
+                        schedule_result = await side_agent.create_schedule(context)
+                        
                         result = json.dumps({
                             "status": schedule_result.get("status", "done"),
-                            "message": schedule_result.get("message", "Schedule panel created"),
-                            "api_response": schedule_result.get("api_response")
+                            "message": "Schedule panel created on board with appointment slots and investigations",
+                            "api_response": schedule_result.get("result")
                         })
                     
                     elif function_name == "send_notification":
@@ -1046,6 +1141,19 @@ Examples: "create an analysis of the liver function", "add findings about the la
                         logger.info(f"🧪 Labs data: {labs}")
                         
                         from datetime import datetime
+                        
+                        # Helper to map status to API expected values
+                        def map_status(status_str, value=None, range_str=""):
+                            """Map status to API values: optimal, warning, critical"""
+                            if status_str:
+                                status_lower = status_str.lower()
+                                if status_lower in ['optimal', 'normal', 'ok']:
+                                    return 'optimal'
+                                elif status_lower in ['warning', 'borderline', 'elevated', 'low']:
+                                    return 'warning'
+                                elif status_lower in ['critical', 'high', 'abnormal', 'danger', 'severe']:
+                                    return 'critical'
+                            return 'warning'  # Default for unknown
                         
                         # Transform lab data for board API - handle various input formats
                         transformed_labs = []
@@ -1113,8 +1221,8 @@ Examples: "create an analysis of the liver function", "add findings about the la
                                             pass
                                     elif item in ['U/L', 'mg/dL', 'g/dL', 'mEq/L', 'mmol/L', '%']:
                                         current_lab['unit'] = item
-                                    elif item.lower() in ['high', 'low', 'normal', 'abnormal']:
-                                        current_lab['status'] = item.lower()
+                                    elif item.lower() in ['high', 'low', 'normal', 'abnormal', 'optimal', 'warning', 'critical']:
+                                        current_lab['status'] = map_status(item)
                                 i += 1
                             
                             # Don't forget the last lab
@@ -1124,7 +1232,7 @@ Examples: "create an analysis of the liver function", "add findings about the la
                                     "value": current_lab.get('value', 0),
                                     "unit": current_lab.get('unit', ''),
                                     "range": current_lab.get('range', ''),
-                                    "status": current_lab.get('status', 'normal')
+                                    "status": map_status(current_lab.get('status', 'warning'))
                                 })
                         else:
                             # Normal processing - labs should be list of dicts
@@ -1135,15 +1243,24 @@ Examples: "create an analysis of the liver function", "add findings about the la
                                         lab = json.loads(lab)
                                     except:
                                         # If it's just a name string, create minimal entry
-                                        lab = {"name": lab, "value": 0, "unit": "", "range": "", "status": "normal"}
+                                        lab = {"name": lab, "value": 0, "unit": "", "range": "", "status": "warning"}
                                 
                                 if isinstance(lab, dict):
+                                    # Clean keys - Gemini sometimes sends keys with quotes like '"name"' instead of 'name'
+                                    cleaned_lab = {}
+                                    for k, v in lab.items():
+                                        # Remove quotes from key if present
+                                        clean_key = k.strip('"').strip("'")
+                                        cleaned_lab[clean_key] = v
+                                    
+                                    logger.info(f"  Lab entry: {cleaned_lab}")
+                                    
                                     transformed_labs.append({
-                                        "parameter": lab.get("name") or lab.get("parameter", "Unknown"),
-                                        "value": lab.get("value", 0),
-                                        "unit": lab.get("unit", ""),
-                                        "range": lab.get("range") or lab.get("normalRange", ""),
-                                        "status": lab.get("status", "normal")
+                                        "parameter": cleaned_lab.get("name") or cleaned_lab.get("parameter", "Unknown"),
+                                        "value": cleaned_lab.get("value", 0),
+                                        "unit": cleaned_lab.get("unit", ""),
+                                        "range": cleaned_lab.get("range") or cleaned_lab.get("normalRange", ""),
+                                        "status": map_status(cleaned_lab.get("status", "warning"))
                                     })
                                 else:
                                     logger.warning(f"Skipping invalid lab entry: {lab}")
@@ -1156,6 +1273,17 @@ Examples: "create an analysis of the liver function", "add findings about the la
                         
                         logger.info(f"🧪 Sending lab payload: {lab_payload}")
                         lab_result = await canvas_ops.create_lab(lab_payload)
+                        
+                        # Auto-focus on lab results after creation
+                        if lab_result.get("status") == "success" or lab_result.get("successful", 0) > 0:
+                            logger.info("🎯 Auto-focusing on lab results timeline...")
+                            try:
+                                await asyncio.sleep(0.5)
+                                focus_result = await canvas_ops.focus_item("lab-track-1")
+                                logger.info(f"✅ Auto-focused on lab results: {focus_result}")
+                            except Exception as e:
+                                logger.error(f"Failed to auto-focus on lab results: {e}")
+                        
                         result = json.dumps({
                             "status": "success",
                             "message": f"Created {len(transformed_labs)} lab results on board",
@@ -1179,6 +1307,17 @@ Examples: "create an analysis of the liver function", "add findings about the la
                         }
                         
                         agent_res = await canvas_ops.create_result(agent_payload)
+                        
+                        # Auto-focus on the newly created agent result
+                        if agent_res and agent_res.get("id"):
+                            logger.info(f"🎯 Auto-focusing on agent result: {agent_res.get('id')}")
+                            try:
+                                await asyncio.sleep(0.5)  # Brief delay to ensure it's rendered
+                                focus_result = await canvas_ops.focus_item(agent_res.get("id"))
+                                logger.info(f"✅ Auto-focused on agent result: {focus_result}")
+                            except Exception as e:
+                                logger.error(f"Failed to auto-focus on agent result: {e}")
+                        
                         result = json.dumps({
                             "status": "success",
                             "message": f"Created agent analysis: {title}",
@@ -1309,7 +1448,7 @@ Examples: "create an analysis of the liver function", "add findings about the la
             
             # Load patient context
             logger.info(f"Loading patient context for voice session...")
-            self.context_data = canvas_ops.get_board_items()
+            self.context_data = await canvas_ops.get_board_items_async()
             
             # Ensure queues are set
             if self.audio_in_queue is None:
@@ -1362,9 +1501,9 @@ Examples: "create an analysis of the liver function", "add findings about the la
             # Send status update to keep browser alive
             await self.send_status_to_ui("connecting", "Loading patient context...")
             
-            # Load patient context using canvas_ops (agent-2.9 way)
+            # Load patient context using canvas_ops (agent-2.9 way) - use async version
             logger.info(f"Loading patient context for voice session...")
-            self.context_data = canvas_ops.get_board_items()
+            self.context_data = await canvas_ops.get_board_items_async()
             
             # Send another status update
             await self.send_status_to_ui("connecting", "Preparing configuration...")
