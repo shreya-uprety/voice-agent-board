@@ -51,7 +51,7 @@ class VoiceWebSocketHandler:
     """Handles real-time voice communication with Gemini Live API"""
     
     # Tool call deduplication - prevent same tool from being called multiple times
-    TOOL_DEDUP_WINDOW_SECONDS = 10  # Ignore duplicate calls within 10 seconds
+    TOOL_DEDUP_WINDOW_SECONDS = 30  # Ignore duplicate calls within 30 seconds
     
     def __init__(self, websocket: WebSocket, patient_id: str):
         self.websocket = websocket
@@ -453,7 +453,7 @@ CRITICAL:
             "realtime_input_config": {
                 "automatic_activity_detection": {
                     "disabled": False,
-                    "start_of_speech_sensitivity": "START_SENSITIVITY_LOW",
+                    "start_of_speech_sensitivity": "START_SENSITIVITY_MEDIUM",
                     "end_of_speech_sensitivity": "END_SENSITIVITY_LOW",
                     "prefix_padding_ms": 100,
                     "silence_duration_ms": 800
@@ -578,38 +578,38 @@ CRITICAL:
         # Create a key from function name and arguments
         args_key = json.dumps(arguments, sort_keys=True) if arguments else ""
         dedup_key = f"{function_name}:{args_key}"
-        
+
         current_time = time.time()
-        
+
         # Clean up old entries
         self._recent_tool_calls = {
-            k: v for k, v in self._recent_tool_calls.items() 
+            k: v for k, v in self._recent_tool_calls.items()
             if current_time - v < self.TOOL_DEDUP_WINDOW_SECONDS
         }
-        
+
         # Check if this call was made recently
         if dedup_key in self._recent_tool_calls:
             elapsed = current_time - self._recent_tool_calls[dedup_key]
             logger.warning(f"⚠️ DUPLICATE tool call detected: {function_name} (called {elapsed:.1f}s ago)")
             return True
-        
-        # Record this call
+
+        # CRITICAL: Record this call IMMEDIATELY before processing
+        # This prevents rapid duplicates in the same turn from both passing
         self._recent_tool_calls[dedup_key] = current_time
         return False
     
     async def handle_tool_call(self, tool_call):
         """Handle tool calls from Gemini using side_agent and canvas_ops"""
         try:
-            logger.info("🔧 Tool call detected")
             function_responses = []
 
             for fc in tool_call.function_calls:
                 function_name = fc.name
                 arguments = dict(fc.args)
 
-                # Check for duplicate calls
+                # Check for duplicate calls FIRST before any logging/notification
                 if self._is_duplicate_tool_call(function_name, arguments):
-                    # Return cached result for duplicate calls
+                    # Return cached result for duplicate calls - no UI notification
                     result = json.dumps({
                         "status": "success",
                         "message": f"{function_name} already executed recently",
@@ -622,10 +622,12 @@ CRITICAL:
                             response={"result": result}
                         )
                     )
-                    logger.info(f"  ⏭️ Skipping duplicate: {function_name}")
+                    # Skip silently - don't spam logs or UI
                     continue
-                
-                logger.info(f"  📋 Executing: {function_name}")
+
+                # Only log and notify for non-duplicate calls
+                logger.info(f"🔧 Tool call: {function_name}")
+                logger.info(f"   Args: {arguments}")
                 
                 # Notify UI that tool is executing
                 await self.send_tool_notification(function_name, "executing")
@@ -1688,7 +1690,7 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
         """Stop current Gemini response and clear audio queue immediately"""
         logger.info("🛑 STOP - Clearing all audio immediately")
         self.should_stop = True
-        
+
         # Clear audio queue immediately - aggressive clearing
         cleared_audio = 0
         for _ in range(1000):  # Safety limit
@@ -1697,7 +1699,7 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
                 cleared_audio += 1
             except asyncio.QueueEmpty:
                 break
-        
+
         # Also clear any pending output
         cleared_out = 0
         for _ in range(1000):  # Safety limit
@@ -1706,11 +1708,23 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
                 cleared_out += 1
             except asyncio.QueueEmpty:
                 break
-        
+
         logger.info(f"✅ STOPPED - cleared {cleared_audio} audio + {cleared_out} out chunks")
-        
-        # Keep should_stop True so play_audio will also stop
-        # It will be reset when play_audio processes the stop
+
+        # Notify client to clear their audio queue too
+        try:
+            await self.websocket.send_json({
+                "type": "stop_confirmed",
+                "message": "Audio stopped",
+                "cleared_chunks": cleared_audio + cleared_out
+            })
+        except Exception as e:
+            logger.error(f"Failed to send stop confirmation: {e}")
+
+        # Keep should_stop True for at least 1 second to ensure all queued audio is blocked
+        await asyncio.sleep(1.0)
+        self.should_stop = False
+        logger.info("✅ Stop flag reset, ready for new audio")
     
     def _calculate_audio_energy(self, audio_bytes: bytes) -> float:
         """Calculate RMS energy of audio chunk for voice activity detection"""
@@ -1732,7 +1746,7 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
         logger.info("🎤 Listening to client audio...")
 
         # Voice Activity Detection settings
-        VAD_THRESHOLD = 500  # RMS threshold for speech detection (adjust as needed)
+        VAD_THRESHOLD = 300  # RMS threshold for speech detection (lowered for better interruption)
         SILENCE_FRAMES_TO_SEND = 5  # Send a few silence frames after speech ends
 
         silence_count = 0
@@ -1839,10 +1853,7 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
                     
                     # Handle tool calls - await them to ensure proper execution
                     if hasattr(response, 'tool_call') and response.tool_call:
-                        logger.info(f"🔧 Tool call detected!")
-                        for fc in response.tool_call.function_calls:
-                            logger.info(f"   📋 Tool: {fc.name}, Args: {dict(fc.args)}")
-                        # Process tool call - don't use create_task, await it
+                        # Don't log here - let handle_tool_call log after dedup check
                         await self.handle_tool_call(response.tool_call)
                 
                 # Only log if meaningful responses
@@ -1854,8 +1865,9 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
             traceback.print_exc()
     
     async def play_audio(self):
-        """Send audio from queue to WebSocket"""
+        """Send audio from queue to WebSocket - stream as fast as possible"""
         logger.info("🔊 Streaming to client...")
+
         try:
             while True:
                 # Check stop flag before waiting for audio
@@ -1870,7 +1882,7 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
                             break
                     if cleared > 0:
                         logger.info(f"🛑 Cleared {cleared} audio chunks (stopped)")
-                    self.should_stop = False
+                    # Don't reset should_stop here - let stop_speaking() handle it
                     await asyncio.sleep(0.05)
                     continue
 
@@ -1884,7 +1896,9 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
                 if self.should_stop:
                     continue
 
+                # Send audio chunk immediately - let client handle buffering
                 await self.websocket.send_bytes(bytestream)
+
         except Exception as e:
             logger.error(f"Error sending audio: {e}")
     

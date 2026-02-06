@@ -1945,9 +1945,13 @@ MRN: ${gen.mrn || gen.patientId || 'N/A'}</pre>
                             // Display status message
                             addMessage('system', `ℹ️ ${data.message}`);
                             console.log('Status:', data);
+                        } else if (data.type === 'stop_confirmed') {
+                            // Server confirmed stop - clear audio immediately
+                            clearAudioQueue();
+                            console.log('Stop confirmed by server:', data);
                         } else if (data.type === 'tool_call') {
                             // Display tool execution
-                            const emoji = data.status === 'executing' ? '🔧' : 
+                            const emoji = data.status === 'executing' ? '🔧' :
                                          data.status === 'completed' ? '✅' : '❌';
                             const msg = data.status === 'executing' ? `${emoji} Executing ${data.tool}...` :
                                        data.status === 'completed' ? `${emoji} ${data.tool} completed` :
@@ -2002,9 +2006,13 @@ MRN: ${gen.mrn || gen.patientId || 'N/A'}</pre>
                             // Display status message
                             addMessage('system', `ℹ️ ${data.message}`);
                             console.log('Status:', data);
+                        } else if (data.type === 'stop_confirmed') {
+                            // Server confirmed stop - clear audio immediately
+                            clearAudioQueue();
+                            console.log('Stop confirmed by server:', data);
                         } else if (data.type === 'tool_call') {
                             // Display tool execution
-                            const emoji = data.status === 'executing' ? '🔧' : 
+                            const emoji = data.status === 'executing' ? '🔧' :
                                          data.status === 'completed' ? '✅' : '❌';
                             const msg = data.status === 'executing' ? `${emoji} Executing ${data.tool}...` :
                                        data.status === 'completed' ? `${emoji} ${data.tool} completed` :
@@ -2109,6 +2117,7 @@ MRN: ${gen.mrn || gen.patientId || 'N/A'}</pre>
                             pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                         }
                         // Send raw PCM bytes to WebSocket
+                        // Gemini's built-in interruption detection will handle stop
                         ws.send(pcmData.buffer);
                     }
                 };
@@ -2127,6 +2136,12 @@ MRN: ${gen.mrn || gen.patientId || 'N/A'}</pre>
         }
 
         function stopRecording() {
+            // Note: Voice-activated stop works by speaking to Gemini (e.g., saying "stop")
+            // The button just stops the microphone and clears local audio playback
+
+            // Clear audio playback
+            clearAudioQueue();
+
             if (streamProcessorNode) {
                 streamProcessorNode.disconnect();
                 streamProcessorNode = null;
@@ -2140,58 +2155,132 @@ MRN: ${gen.mrn || gen.patientId || 'N/A'}</pre>
                 audioContext.close();
                 audioContext = null;
             }
-            
+
             isRecording = false;
             document.getElementById('voiceBtn').classList.remove('active');
             document.getElementById('voiceBtn').textContent = '🎤 Voice';
             document.getElementById('voiceState').textContent = 'Ready';
         }
 
-        // Audio playback for Gemini Live PCM audio
+        // Audio playback for Gemini Live PCM audio - queue-based sequential with buffering
         const audioQueue = [];
-        let isPlaying = false;
-        
+        let isProcessingAudio = false;
+        let playbackContext = null;
+        let currentSource = null;
+        let nextStartTime = 0;
+
         async function playAudioBlob(blob) {
             audioQueue.push(blob);
-            if (!isPlaying) {
-                processAudioQueue();
+            if (!isProcessingAudio) {
+                processNextAudioChunk();
             }
         }
-        
-        async function processAudioQueue() {
+
+        async function processNextAudioChunk() {
             if (audioQueue.length === 0) {
-                isPlaying = false;
+                isProcessingAudio = false;
+                nextStartTime = 0;
                 document.getElementById('voiceState').textContent = 'Ready';
                 return;
             }
-            
-            isPlaying = true;
+
+            isProcessingAudio = true;
             document.getElementById('voiceState').textContent = 'Speaking...';
-            
-            const blob = audioQueue.shift();
-            const arrayBuffer = await blob.arrayBuffer();
-            
-            // Play PCM audio from Gemini Live
-            const playContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 24000
-            });
-            
-            const audioBuffer = playContext.createBuffer(1, arrayBuffer.byteLength / 2, 24000);
-            const channelData = audioBuffer.getChannelData(0);
-            const pcmData = new Int16Array(arrayBuffer);
-            
-            for (let i = 0; i < pcmData.length; i++) {
-                channelData[i] = pcmData[i] / 0x8000;
+
+            try {
+                // Create or resume context - CRITICAL: Use 24kHz for Gemini Live API
+                if (!playbackContext || playbackContext.state === 'closed') {
+                    playbackContext = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: 24000,
+                        latencyHint: 'interactive'  // Low latency for voice
+                    });
+                    nextStartTime = 0;
+                    console.log('Created new AudioContext at 24kHz');
+                }
+
+                if (playbackContext.state === 'suspended') {
+                    await playbackContext.resume();
+                }
+
+                const blob = audioQueue.shift();
+                const arrayBuffer = await blob.arrayBuffer();
+
+                // CRITICAL: Ensure we're treating this as 24kHz PCM 16-bit mono
+                const pcmData = new Int16Array(arrayBuffer);
+
+                // Verify data size is reasonable
+                if (pcmData.length === 0) {
+                    console.warn('Empty audio chunk received, skipping');
+                    processNextAudioChunk();
+                    return;
+                }
+
+                // Create audio buffer at EXACTLY 24kHz sample rate
+                const audioBuffer = playbackContext.createBuffer(1, pcmData.length, 24000);
+                const channelData = audioBuffer.getChannelData(0);
+
+                // Convert PCM 16-bit to Float32 in range [-1.0, 1.0]
+                for (let i = 0; i < pcmData.length; i++) {
+                    channelData[i] = Math.max(-1, Math.min(1, pcmData[i] / 32768.0));
+                }
+
+                // Create and play source with proper scheduling
+                const source = playbackContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(playbackContext.destination);
+
+                currentSource = source;
+
+                // Schedule playback with smooth continuity
+                const currentTime = playbackContext.currentTime;
+                if (nextStartTime < currentTime) {
+                    nextStartTime = currentTime;
+                }
+
+                // Play this chunk, then process next when done
+                source.onended = () => {
+                    currentSource = null;
+                    processNextAudioChunk();
+                };
+
+                source.start(nextStartTime);
+                nextStartTime += audioBuffer.duration;
+
+            } catch (error) {
+                console.error('Audio playback error:', error);
+                // Continue with next chunk even if this one failed
+                currentSource = null;
+                nextStartTime = 0;
+                setTimeout(() => processNextAudioChunk(), 10);
             }
-            
-            const source = playContext.createBufferSource();
-            source.buffer = audioBuffer;
-            source.connect(playContext.destination);
-            source.onended = () => {
-                playContext.close();
-                processAudioQueue();
-            };
-            source.start();
+        }
+
+        // Clear audio queue (for interruptions)
+        function clearAudioQueue() {
+            console.log('Clearing audio queue, had', audioQueue.length, 'chunks');
+            audioQueue.length = 0;
+
+            if (currentSource) {
+                try {
+                    currentSource.stop();
+                    currentSource.disconnect();
+                } catch(e) {
+                    console.warn('Error stopping source:', e);
+                }
+                currentSource = null;
+            }
+
+            isProcessingAudio = false;
+            nextStartTime = 0;
+
+            // Keep the context alive but reset timing
+            // Don't close it as that can cause clicks/pops
+            if (playbackContext && playbackContext.state !== 'closed') {
+                // Just reset, don't close
+                nextStartTime = playbackContext.currentTime;
+            }
+
+            document.getElementById('voiceState').textContent = 'Ready';
         }
     </script>
 </body>
