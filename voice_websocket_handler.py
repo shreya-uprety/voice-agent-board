@@ -417,7 +417,7 @@ User must say "add" or "post" or "put" - this is for ADDING to board, not answer
             {
                 "name": "create_agent_result",
                 "description": """TRIGGER: User says "create analysis" OR "add assessment" OR "generate findings"
-ACTION: Call create_agent_result() with NO arguments IMMEDIATELY  
+ACTION: Call create_agent_result() with NO arguments IMMEDIATELY
 RESPONSE: Say ONLY "Done" - nothing else
 
 Example:
@@ -430,6 +430,32 @@ CRITICAL:
 - System auto-generates everything from patient data
 - Format includes: Patient name, Key Findings (Liver Function Tests, Clinical Impression, Recommendations)
 - Text explanation is FORBIDDEN""",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            },
+            {
+                "name": "stop_audio",
+                "description": """CRITICAL: User says "stop", "quiet", "enough", "shut up", "silence", "pause", "be quiet", "that's enough"
+
+ACTION: Call stop_audio() IMMEDIATELY to stop ALL audio playback
+RESPONSE: Say ONLY "Okay" or say NOTHING
+
+This is the HIGHEST PRIORITY command. When user wants you to stop, call this tool immediately.
+
+Example:
+User: "Stop"
+YOU: [CALL stop_audio()] -> "Okay" (or nothing)
+
+User: "Be quiet"
+YOU: [CALL stop_audio()] -> (nothing)
+
+User: "That's enough"
+YOU: [CALL stop_audio()] -> "Okay"
+
+FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -1655,7 +1681,16 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
                             "message": f"Created agent analysis: {title}",
                             "api_response": agent_res
                         })
-                    
+
+                    elif function_name == "stop_audio":
+                        # User said "stop" - immediately clear all audio
+                        logger.info("🛑 STOP AUDIO - User requested to stop speaking")
+                        await self.stop_speaking()
+                        result = json.dumps({
+                            "status": "success",
+                            "message": "Audio stopped"
+                        })
+
                     else:
                         result = f"Unknown tool: {function_name}"
                     
@@ -1825,37 +1860,47 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
     async def receive_audio(self):
         """Receive audio and handle tool calls from Gemini Live"""
         logger.info("🔊 Starting response processing...")
+        first_audio_logged = False
         try:
             while True:
                 turn = self.session.receive()
-                
+
                 response_count = 0
                 audio_chunks = 0
                 async for response in turn:
                     response_count += 1
-                    
+
                     # Check stop flag - if stopped, skip processing
                     if self.should_stop:
                         continue
-                    
+
                     # Check for interruption (user started speaking)
                     if hasattr(response, 'server_content') and response.server_content:
                         if response.server_content.interrupted:
                             logger.info("🛑 User interrupted!")
                             await self.stop_speaking()
                             continue
-                    
+
                     # Handle audio data - stream immediately for low latency
                     if data := response.data:
                         if not self.should_stop:  # Don't queue if stopped
+                            # Debug first audio chunk to verify format
+                            if not first_audio_logged:
+                                logger.info(f"🎵 First audio chunk: {len(data)} bytes, type: {type(data)}")
+                                # PCM 16-bit mono at 24kHz: 2 bytes per sample, 24000 samples/sec
+                                # So 1 second = 48000 bytes, 100ms = 4800 bytes
+                                duration_ms = (len(data) / 2 / 24000) * 1000
+                                logger.info(f"🎵 Estimated duration: {duration_ms:.1f}ms at 24kHz")
+                                first_audio_logged = True
+
                             self.audio_in_queue.put_nowait(data)
                             audio_chunks += 1
-                    
+
                     # Handle tool calls - await them to ensure proper execution
                     if hasattr(response, 'tool_call') and response.tool_call:
                         # Don't log here - let handle_tool_call log after dedup check
                         await self.handle_tool_call(response.tool_call)
-                
+
                 # Only log if meaningful responses
                 if audio_chunks > 0:
                     logger.info(f"🔊 Turn: {audio_chunks} audio chunks sent to client")

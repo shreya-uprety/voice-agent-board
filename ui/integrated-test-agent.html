@@ -2195,7 +2195,12 @@ MRN: ${gen.mrn || gen.patientId || 'N/A'}</pre>
                         latencyHint: 'interactive'  // Low latency for voice
                     });
                     nextStartTime = 0;
-                    console.log('Created new AudioContext at 24kHz');
+                    // CRITICAL: Log actual sample rate - browser might not support exact 24kHz
+                    console.log('🎵 Created AudioContext - Requested: 24kHz, Actual:', playbackContext.sampleRate);
+                    if (playbackContext.sampleRate !== 24000) {
+                        console.warn('⚠️ Browser using different sample rate than requested! This may cause pitch issues.');
+                        console.warn('⚠️ Requested: 24000 Hz, Browser using:', playbackContext.sampleRate, 'Hz');
+                    }
                 }
 
                 if (playbackContext.state === 'suspended') {
@@ -2205,7 +2210,7 @@ MRN: ${gen.mrn || gen.patientId || 'N/A'}</pre>
                 const blob = audioQueue.shift();
                 const arrayBuffer = await blob.arrayBuffer();
 
-                // CRITICAL: Ensure we're treating this as 24kHz PCM 16-bit mono
+                // CRITICAL: Gemini Live API sends PCM 16-bit mono at 24kHz
                 const pcmData = new Int16Array(arrayBuffer);
 
                 // Verify data size is reasonable
@@ -2215,13 +2220,26 @@ MRN: ${gen.mrn || gen.patientId || 'N/A'}</pre>
                     return;
                 }
 
-                // Create audio buffer at EXACTLY 24kHz sample rate
-                const audioBuffer = playbackContext.createBuffer(1, pcmData.length, 24000);
+                // IMPORTANT: createBuffer's sampleRate parameter tells WebAudio what rate the SOURCE data is
+                // The context will automatically resample to its own rate (usually 48kHz) when playing
+                // So we MUST use 24000 here since that's what Gemini sends
+                const GEMINI_SAMPLE_RATE = 24000;
+                const audioBuffer = playbackContext.createBuffer(1, pcmData.length, GEMINI_SAMPLE_RATE);
                 const channelData = audioBuffer.getChannelData(0);
 
-                // Convert PCM 16-bit to Float32 in range [-1.0, 1.0]
+                // Convert PCM 16-bit signed integer to Float32 in range [-1.0, 1.0]
+                // Division by 32768.0 (2^15) normalizes 16-bit signed values
+                const INT16_MAX = 32768.0;
                 for (let i = 0; i < pcmData.length; i++) {
-                    channelData[i] = Math.max(-1, Math.min(1, pcmData[i] / 32768.0));
+                    // Clamp to prevent clipping from any out-of-range values
+                    const normalized = pcmData[i] / INT16_MAX;
+                    channelData[i] = Math.max(-1.0, Math.min(1.0, normalized));
+                }
+
+                // Debug: Log first chunk details to verify format
+                if (audioQueue.length === 0) {  // Log only when processing the first chunk
+                    const durationSec = audioBuffer.duration;
+                    console.log(`🎵 Audio chunk: ${pcmData.length} samples, ${durationSec.toFixed(3)}s duration, ${GEMINI_SAMPLE_RATE}Hz → ${playbackContext.sampleRate}Hz`);
                 }
 
                 // Create and play source with proper scheduling
@@ -2257,9 +2275,10 @@ MRN: ${gen.mrn || gen.patientId || 'N/A'}</pre>
 
         // Clear audio queue (for interruptions)
         function clearAudioQueue() {
-            console.log('Clearing audio queue, had', audioQueue.length, 'chunks');
+            console.log('🛑 Clearing audio queue, had', audioQueue.length, 'chunks');
             audioQueue.length = 0;
 
+            // Stop current audio source
             if (currentSource) {
                 try {
                     currentSource.stop();
@@ -2273,14 +2292,19 @@ MRN: ${gen.mrn || gen.patientId || 'N/A'}</pre>
             isProcessingAudio = false;
             nextStartTime = 0;
 
-            // Keep the context alive but reset timing
-            // Don't close it as that can cause clicks/pops
+            // Close and recreate context to ensure clean state
+            // This prevents any timing drift or stuck states
             if (playbackContext && playbackContext.state !== 'closed') {
-                // Just reset, don't close
-                nextStartTime = playbackContext.currentTime;
+                try {
+                    playbackContext.close();
+                } catch(e) {
+                    console.warn('Error closing context:', e);
+                }
+                playbackContext = null;
             }
 
             document.getElementById('voiceState').textContent = 'Ready';
+            console.log('✅ Audio queue cleared and context reset');
         }
     </script>
 </body>
