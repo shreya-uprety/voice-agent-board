@@ -207,7 +207,7 @@ Examples: "notify the team about critical labs", "send alert about patient statu
             }
         },
         {
-            "name": "add_results_panel",
+            "name": "create_lab_results",
             "description": """Add a panel showing test results to the board.
 
 ONLY use when user says: "Add labs", "Post labs", "Create labs panel", "Put labs on board"
