@@ -1170,24 +1170,31 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                         
                         # Try direct mapping first
                         object_id = None
+                        already_focused = False
                         for key, item_id in focus_map.items():
                             if key in query:
                                 object_id = item_id
                                 logger.info(f"✅ Mapped '{query}' to {object_id}")
                                 break
-                        
+
                         # If no direct mapping, use side_agent to resolve
+                        # NOTE: resolve_object_id already calls focus_item internally
                         if not object_id:
-                            context = json.dumps(self.context_data) if self.context_data else "{}"
-                            resolve_result = await side_agent.resolve_object_id(query, context)
+                            resolve_result = await side_agent.resolve_object_id(query)
                             if isinstance(resolve_result, dict):
                                 object_id = resolve_result.get("object_id")
+                                # resolve_object_id already focused, don't call again
+                                already_focused = True
                             else:
                                 object_id = resolve_result
-                        
+
                         if object_id:
-                            focus_result = await canvas_ops.focus_item(object_id)
-                            # Include the actual API response
+                            if not already_focused:
+                                focus_result = await canvas_ops.focus_item(object_id)
+                            else:
+                                focus_result = resolve_result.get("focus_result", {})
+                                logger.info(f"🎯 Already focused by resolve_object_id, skipping duplicate")
+
                             result = json.dumps({
                                 "status": "success" if focus_result.get("success") else "error",
                                 "message": f"Focused on {object_id}",
