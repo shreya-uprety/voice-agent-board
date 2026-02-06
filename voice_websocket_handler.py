@@ -1158,9 +1158,14 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                             "key events": "key-events-track-1",
                             "patient": "sidebar-1",
                             "profile": "sidebar-1",
+                            "patient profile": "sidebar-1",
                             "sidebar": "sidebar-1",
                             "adverse": "adverse-event-analytics",
                             "diagnosis": "differential-diagnosis",
+                            "easl": "easl-panel",
+                            "easl panel": "easl-panel",
+                            "guideline": "easl-panel",
+                            "guidelines": "easl-panel",
                         }
                         
                         # Try direct mapping first
@@ -1261,37 +1266,70 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                     elif function_name == "generate_legal_report":
                         # Generate legal report
                         logger.info("⚖️ Generating legal report...")
-                        legal_result = await side_agent.create_legal_doc()
-                        
-                        # Auto-focus on the newly created legal report
-                        logger.info("🎯 Auto-focusing on legal report...")
                         try:
-                            # Try to focus on the AgentResult that was just created
-                            await asyncio.sleep(1)  # Give it a moment to be created
-                            focus_result = await canvas_ops.focus_item("AgentResult")
-                            logger.info(f"✅ Auto-focused on legal report: {focus_result}")
+                            legal_result = await side_agent.create_legal_doc()
+                            logger.info(f"📊 Legal report result: {legal_result}")
+
+                            # Auto-focus on the newly created legal report using its ID
+                            report_id = legal_result.get('id') or legal_result.get('result', {}).get('id')
+                            if report_id:
+                                logger.info(f"🎯 Auto-focusing on legal report: {report_id}")
+                                try:
+                                    await asyncio.sleep(0.5)  # Brief delay for rendering
+                                    focus_result = await canvas_ops.focus_item(report_id)
+                                    logger.info(f"✅ Auto-focused on legal report: {focus_result}")
+                                except Exception as focus_error:
+                                    logger.error(f"Failed to auto-focus on legal report: {focus_error}")
+                            else:
+                                logger.warning("⚠️ No report ID returned, cannot auto-focus")
+
+                            result = json.dumps({
+                                "status": "success",
+                                "message": "Legal compliance report generated and added to board",
+                                "report_id": report_id
+                            })
                         except Exception as e:
-                            logger.error(f"Failed to auto-focus on legal report: {e}")
-                        
-                        result = json.dumps({
-                            "status": "success",
-                            "message": "Legal compliance report generated and added to board",
-                            "summary": str(legal_result.get('generated', {}))[:500]
-                        })
+                            logger.error(f"❌ Legal report generation failed: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            result = json.dumps({
+                                "status": "error",
+                                "message": f"Failed to generate legal report: {str(e)}"
+                            })
                     
                     elif function_name == "create_schedule":
                         # Create schedule panel using side_agent for proper structure
                         context = arguments.get("context", "Follow-up appointment scheduling")
                         logger.info(f"📅 Creating schedule: {context}")
-                        
-                        # Use side_agent.create_schedule which generates proper scheduling structure
-                        schedule_result = await side_agent.create_schedule(context)
-                        
-                        result = json.dumps({
-                            "status": schedule_result.get("status", "done"),
-                            "message": "Schedule panel created on board with appointment slots and investigations",
-                            "api_response": schedule_result.get("result")
-                        })
+
+                        try:
+                            # Use side_agent.create_schedule which generates proper scheduling structure
+                            schedule_result = await side_agent.create_schedule(self.patient_id, context)
+                            logger.info(f"📊 Schedule result: {schedule_result}")
+
+                            # Auto-focus on the created schedule
+                            schedule_id = schedule_result.get('id') or schedule_result.get('result', {}).get('id')
+                            if schedule_id:
+                                logger.info(f"🎯 Auto-focusing on schedule: {schedule_id}")
+                                try:
+                                    await asyncio.sleep(0.5)
+                                    await canvas_ops.focus_item(schedule_id)
+                                except Exception as focus_error:
+                                    logger.error(f"Failed to auto-focus on schedule: {focus_error}")
+
+                            result = json.dumps({
+                                "status": "success",
+                                "message": "Schedule panel created on board",
+                                "schedule_id": schedule_id
+                            })
+                        except Exception as e:
+                            logger.error(f"❌ Schedule creation failed: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            result = json.dumps({
+                                "status": "error",
+                                "message": f"Failed to create schedule: {str(e)}"
+                            })
                     
                     elif function_name == "send_notification":
                         # Send notification
@@ -1696,11 +1734,13 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
                 
                 # Notify UI that tool completed
                 await self.send_tool_notification(function_name, "completed", result)
-                
+
                 logger.info(f"  ✅ Tool {function_name} completed")
-            
+
             # Send responses back to Gemini - use correct Live API method
+            logger.info(f"📤 Sending {len(function_responses)} function response(s) back to Gemini")
             await self.session.send(input={"function_responses": function_responses})
+            logger.info("✅ Function responses sent - awaiting Gemini's reply")
 
         except Exception as e:
             logger.error(f"Tool execution error: {e}")
@@ -1846,25 +1886,39 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
         """Receive audio and handle tool calls from Gemini Live"""
         logger.info("🔊 Starting response processing...")
         first_audio_logged = False
+        turn_number = 0
         try:
             while True:
                 turn = self.session.receive()
+                turn_number += 1
+                logger.info(f"🔄 === TURN {turn_number} START ===")
 
                 response_count = 0
                 audio_chunks = 0
+                turn_has_text = False
                 async for response in turn:
                     response_count += 1
+
+                    # DEBUG: Log response details to diagnose "Done" duplication
+                    # Check if response has server_content with model_turn for text
+                    if hasattr(response, 'server_content') and response.server_content:
+                        sc = response.server_content
+                        if hasattr(sc, 'model_turn') and sc.model_turn:
+                            if hasattr(sc.model_turn, 'parts'):
+                                for part in sc.model_turn.parts:
+                                    if hasattr(part, 'text') and part.text:
+                                        logger.info(f"📝 Gemini generated text: '{part.text}'")
+                                        turn_has_text = True
+
+                        # Check for interruption
+                        if sc.interrupted:
+                            logger.info("🛑 User interrupted!")
+                            await self.stop_speaking()
+                            continue
 
                     # Check stop flag - if stopped, skip processing
                     if self.should_stop:
                         continue
-
-                    # Check for interruption (user started speaking)
-                    if hasattr(response, 'server_content') and response.server_content:
-                        if response.server_content.interrupted:
-                            logger.info("🛑 User interrupted!")
-                            await self.stop_speaking()
-                            continue
 
                     # Handle audio data - stream immediately for low latency
                     if data := response.data:
@@ -1888,7 +1942,11 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
 
                 # Only log if meaningful responses
                 if audio_chunks > 0:
-                    logger.info(f"🔊 Turn: {audio_chunks} audio chunks sent to client")
+                    logger.info(f"🔊 Turn {turn_number}: {audio_chunks} audio chunks sent to client")
+                if turn_has_text and audio_chunks > 0:
+                    logger.info("⚠️  Turn had both text and audio - check for duplication")
+
+                logger.info(f"🔄 === TURN {turn_number} END (responses: {response_count}, audio: {audio_chunks}) ===")
                         
         except Exception as e:
             logger.error(f"Error receiving audio: {e}")
