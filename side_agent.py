@@ -592,18 +592,21 @@ async def generate_dili_diagnosis():
 
     model = genai.GenerativeModel(MODEL, system_instruction=SYSTEM_PROMPT)
     ehr_data = await load_ehr()
-    
+
     prompt = f"Generate DILI diagnosis based on patient data.\n\nPatient data: {ehr_data}"
 
-    resp = model.generate_content(
-        prompt,
-        generation_config=genai.GenerationConfig(
-            response_mime_type="application/json",
-            temperature=0.7,
-        )
+    gen_config = genai.GenerationConfig(
+        response_mime_type="application/json",
+        temperature=0.7,
     )
+    # Run synchronous generate_content in thread to avoid blocking event loop
+    resp = await asyncio.to_thread(model.generate_content, prompt, generation_config=gen_config)
 
     result = json.loads(resp.text)
+    # AI sometimes returns a list instead of dict - handle gracefully
+    if isinstance(result, list):
+        print(f"⚠️ DILI diagnosis returned list ({len(result)} items), using first element")
+        result = result[0] if result else {}
     with open(f"{config.output_dir}/generate_dili_diagnosis.json", "w", encoding="utf-8") as f:
         json.dump(result, f, indent=4)
 
@@ -638,18 +641,21 @@ async def generate_patient_report():
 
     model = genai.GenerativeModel(MODEL, system_instruction=SYSTEM_PROMPT)
     ehr_data = await load_ehr()
-    
+
     prompt = f"Generate patient report based on patient data.\n\nPatient data: {ehr_data}"
 
-    resp = model.generate_content(
-        prompt,
-        generation_config=genai.GenerationConfig(
-            response_mime_type="application/json",
-            temperature=0.7,
-        )
+    gen_config = genai.GenerationConfig(
+        response_mime_type="application/json",
+        temperature=0.7,
     )
+    # Run synchronous generate_content in thread to avoid blocking event loop
+    resp = await asyncio.to_thread(model.generate_content, prompt, generation_config=gen_config)
 
     result = json.loads(resp.text)
+    # AI sometimes returns a list instead of dict - handle gracefully
+    if isinstance(result, list):
+        print(f"⚠️ Patient report returned list ({len(result)} items), using first element")
+        result = result[0] if result else {}
     with open(f"{config.output_dir}/generate_patient_report.json", "w", encoding="utf-8") as f:
         json.dump(result, f, indent=4)
 
@@ -683,18 +689,21 @@ async def generate_legal_report():
 
     model = genai.GenerativeModel(MODEL, system_instruction=SYSTEM_PROMPT)
     ehr_data = await load_ehr()
-    
+
     prompt = f"Generate a legal compliance report based on patient data.\n\nPatient data: {ehr_data}"
 
-    resp = model.generate_content(
-        prompt,
-        generation_config=genai.GenerationConfig(
-            response_mime_type="application/json",
-            temperature=0.7,
-        )
+    gen_config = genai.GenerationConfig(
+        response_mime_type="application/json",
+        temperature=0.7,
     )
+    # Run synchronous generate_content in thread to avoid blocking event loop
+    resp = await asyncio.to_thread(model.generate_content, prompt, generation_config=gen_config)
 
     result = json.loads(resp.text)
+    # AI sometimes returns a list instead of dict - handle gracefully
+    if isinstance(result, list):
+        print(f"⚠️ Legal report returned list ({len(result)} items), using first element")
+        result = result[0] if result else {}
     with open(f"{config.output_dir}/generate_legal_report.json", "w", encoding="utf-8") as f:
         json.dump(result, f, indent=4)
 

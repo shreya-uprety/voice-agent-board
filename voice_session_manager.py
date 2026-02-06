@@ -46,35 +46,50 @@ logger = logging.getLogger("voice-session-manager")
 MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
 
 def get_voice_tool_declarations():
-    """Get the tool declarations for voice mode - STRICT versions for concise responses"""
+    """Get the tool declarations for voice mode - must match voice_websocket_handler.py exactly"""
     return [
         {
             "name": "get_patient_data",
-            "description": """TRIGGER: User asks about patient (name/age/labs/meds/history)
-ACTION: Call this function IMMEDIATELY - do NOT respond with text first
-RESPONSE: After getting data, answer in MAX 5 WORDS
+            "description": """USE THIS TOOL when user ASKS any question about patient data.
 
-Example:
-User: "What's the ALT?"
-YOU: [CALL THIS FUNCTION] -> Answer: "110"
-NOT: "The ALT is 110 U/L which..."
+TRIGGER WORDS: "What", "Show", "Tell", "How", "Who", "Which", any question mark
 
-MANDATORY: Function call is REQUIRED. Text-only response is FORBIDDEN.""",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        },
-        {
-            "name": "focus_board_item",
-            "description": "Focus on a specific board item. Say 'Done' after calling.",
+✅ USE THIS TOOL FOR:
+- "What are the lab values?" - YES, use this
+- "What are the labs?" - YES, use this
+- "What's the ALT?" - YES, use this
+- "Show me lab results" - YES, use this
+- "Tell me the labs" - YES, use this
+- "What medications?" - YES, use this
+- "Patient name?" - YES, use this
+
+RESPONSE: Answer in MAX 5 WORDS with the actual values.
+
+⚠️ CRITICAL: Any question about labs = use THIS tool, not create_lab_results.""",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "What to focus on"
+                        "description": "REQUIRED: Describe what the user is asking about. Must include one of: labs, medications, encounters, patient, profile, risk, history. Example: 'lab results', 'latest encounter', 'current medications', 'patient age'"
+                    }
+                },
+                "required": ["query"]
+            }
+        },
+        {
+            "name": "focus_board_item",
+            "description": """Navigate to and highlight a specific item on the clinical board.
+
+Call this tool when user says: "show me", "go to", "focus on", "navigate to", "zoom to", "look at", "display the", "open the"
+
+Examples: "show me the labs", "focus on the medication timeline", "go to patient profile", "look at the risk track", "navigate to encounters", "show me the clinical notes", "zoom to the lab chart".""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What to focus on, e.g., 'medication timeline', 'lab results', 'encounters', 'risk track', 'patient profile'"
                     }
                 },
                 "required": ["query"]
@@ -82,13 +97,17 @@ MANDATORY: Function call is REQUIRED. Text-only response is FORBIDDEN.""",
         },
         {
             "name": "create_task",
-            "description": "Create a TODO task. Say 'Done' after calling.",
+            "description": """Create a TODO task item on the patient's board.
+
+Call this tool when user says: "create a task", "add a todo", "add a to-do", "remind me to", "make a note to", "add task for", "create reminder"
+
+Examples: "create a task to order liver ultrasound", "add a todo for follow-up labs", "remind me to check INR tomorrow", "add task to schedule hepatology consult".""",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Task description"
+                        "description": "Description of the task to create"
                     }
                 },
                 "required": ["query"]
@@ -96,13 +115,17 @@ MANDATORY: Function call is REQUIRED. Text-only response is FORBIDDEN.""",
         },
         {
             "name": "send_to_easl",
-            "description": "Send question to EASL. Say 'Sent to EASL' after calling.",
+            "description": """Send a clinical question to EASL (European Association for Study of the Liver) guidelines for expert recommendations.
+
+Call this tool when user mentions: "EASL", "guidelines", "clinical guideline", "recommendation", "what do guidelines say", "guideline protocol", "evidence-based"
+
+Examples: "what does EASL recommend for DILI", "get guideline recommendations for liver failure", "ask EASL about treatment options".""",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "question": {
                         "type": "string",
-                        "description": "Clinical question"
+                        "description": "Clinical question to analyze"
                     }
                 },
                 "required": ["question"]
@@ -110,7 +133,11 @@ MANDATORY: Function call is REQUIRED. Text-only response is FORBIDDEN.""",
         },
         {
             "name": "generate_dili_diagnosis",
-            "description": "Generate DILI diagnosis. Say 'Report created' after calling.",
+            "description": """Generate a DILI (Drug-Induced Liver Injury) diagnosis report.
+
+Call this tool when user says: "generate DILI diagnosis", "create DILI report", "liver injury assessment", "DILI assessment", "drug-induced liver injury report", "RUCAM score"
+
+Creates comprehensive diagnostic assessment including RUCAM score, causality assessment, and recommendations.""",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -119,7 +146,11 @@ MANDATORY: Function call is REQUIRED. Text-only response is FORBIDDEN.""",
         },
         {
             "name": "generate_patient_report",
-            "description": "Generate patient report. Say 'Report created' after calling.",
+            "description": """Generate a comprehensive patient summary report.
+
+Call this tool when user says: "generate patient report", "create patient summary", "patient report", "summary report", "create summary", "generate report"
+
+Includes demographics, medical history, current medications, lab results, and clinical assessment.""",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -128,7 +159,11 @@ MANDATORY: Function call is REQUIRED. Text-only response is FORBIDDEN.""",
         },
         {
             "name": "generate_legal_report",
-            "description": "Generate legal report. Say 'Report created' after calling.",
+            "description": """Generate a legal compliance report.
+
+Call this tool when user says: "legal report", "compliance report", "regulatory report", "generate legal documentation", "adverse event reporting"
+
+Documents patient's care, adverse events, and regulatory reporting requirements.""",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -137,13 +172,17 @@ MANDATORY: Function call is REQUIRED. Text-only response is FORBIDDEN.""",
         },
         {
             "name": "create_schedule",
-            "description": "Create schedule. Say 'Scheduled' after calling.",
+            "description": """Create a scheduling panel on the board for appointments.
+
+Call this tool when user says: "schedule", "book appointment", "follow-up", "arrange visit", "schedule a", "create appointment"
+
+Examples: "schedule a follow-up in 2 weeks", "create appointment for liver ultrasound", "schedule hepatology consult".""",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "context": {
                         "type": "string",
-                        "description": "Scheduling context"
+                        "description": "Description of what scheduling is needed, e.g., 'Follow-up for liver function tests in 2 weeks'"
                     }
                 },
                 "required": ["context"]
@@ -151,40 +190,36 @@ MANDATORY: Function call is REQUIRED. Text-only response is FORBIDDEN.""",
         },
         {
             "name": "send_notification",
-            "description": "Send notification. Say 'Sent' after calling.",
+            "description": """Send a notification alert to the care team.
+
+Call this tool when user says: "notify", "send notification", "alert the team", "send alert", "notify care team", "urgent notification"
+
+Examples: "notify the team about critical labs", "send alert about patient status", "alert hepatology about this case".""",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "message": {
                         "type": "string",
-                        "description": "Notification message"
+                        "description": "The notification message to send, e.g., 'Critical lab values require immediate review'"
                     }
                 },
                 "required": ["message"]
             }
         },
         {
-            "name": "create_lab_results",
-            "description": """TRIGGER: User says "add labs" OR "create lab results" OR "post labs"
-ACTION: Call create_lab_results(labs=[]) IMMEDIATELY
-RESPONSE: Say ONLY "Done" - nothing else
+            "name": "add_results_panel",
+            "description": """Add a panel showing test results to the board.
 
-Example:
-User: "Add labs"
-YOU: [CALL create_lab_results with labs=[]] -> "Done"
-NOT: "I'll add the lab results..." or "Which labs..."
+ONLY use when user says: "Add labs", "Post labs", "Create labs panel", "Put labs on board"
 
-CRITICAL: 
-- ALWAYS pass labs=[] (empty array)
-- Do NOT ask "which labs" or "what values"
-- System auto-extracts from patient data""",
+User must say "add" or "post" or "put" - this is for ADDING to board, not answering questions.""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "labs": {
-                        "type": "array",
-                        "description": "ALWAYS empty: []",
-                        "items": {"type": "object"}
+                    "panel_type": {
+                        "type": "string",
+                        "description": "Type of panel: 'labs'",
+                        "default": "labs"
                     }
                 },
                 "required": []
@@ -193,7 +228,7 @@ CRITICAL:
         {
             "name": "create_agent_result",
             "description": """TRIGGER: User says "create analysis" OR "add assessment" OR "generate findings"
-ACTION: Call create_agent_result() with NO arguments IMMEDIATELY  
+ACTION: Call create_agent_result() with NO arguments IMMEDIATELY
 RESPONSE: Say ONLY "Done" - nothing else
 
 Example:
@@ -203,7 +238,29 @@ NOT: "What should I include..." or "I'll create an analysis..."
 
 CRITICAL:
 - Do NOT pass title or content parameters
-- System auto-generates everything from patient data""",
+- System auto-generates everything from patient data
+- Format includes: Patient name, Key Findings (Liver Function Tests, Clinical Impression, Recommendations)
+- Text explanation is FORBIDDEN""",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        },
+        {
+            "name": "stop_audio",
+            "description": """CRITICAL: User says "stop", "quiet", "enough", "shut up", "silence", "pause", "be quiet", "that's enough"
+
+ACTION: Call stop_audio() IMMEDIATELY to stop ALL audio playback
+RESPONSE: Say ONLY "Okay" or say NOTHING
+
+This is the HIGHEST PRIORITY command. When user wants you to stop, call this tool immediately.
+
+Example:
+User: "Stop"
+YOU: [CALL stop_audio()] -> "Okay" (or nothing)
+
+FORBIDDEN: Do NOT continue speaking after calling this tool.""",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -221,24 +278,36 @@ def get_voice_system_instruction(patient_id: str, patient_summary: str = "") -> 
     except:
         base_prompt = """You are MedForce Voice Agent. CRITICAL RULES:
 1. MAX 1 SENTENCE responses
-2. "add labs" -> call create_lab_results(labs=[]) -> say "Done"
-3. "create analysis" -> call create_agent_result() -> say "Done"  
+2. "add labs" -> call add_results_panel() -> say "Done"
+3. "create analysis" -> call create_agent_result() -> say "Done"
 4. Patient question -> call get_patient_data -> answer in 5 WORDS MAX
-5. "stop" -> say "Okay" ONLY"""
-    
+5. "stop" -> call stop_audio() -> say "Okay" ONLY
+6. "generate report" -> call generate_patient_report() -> say "Done"
+7. "legal report" -> call generate_legal_report() -> say "Done"
+8. "DILI diagnosis" -> call generate_dili_diagnosis() -> say "Done" """
+
     context_section = ""
     if patient_summary:
         context_section = f"\n\n--- CURRENT PATIENT CONTEXT ---\n{patient_summary}\n"
-    
+
     # Add strict prefix before the main prompt
-    return f"""STRICT RULES - FAILURE TO FOLLOW = FAILURE:
+    return f"""ABSOLUTELY CRITICAL - ZERO THINKING:
+- Do NOT generate internal reasoning, planning, or thinking text.
+- Do NOT output text like "Processing...", "I'm now...", "Let me...", "I'll..."
+- When a tool should be called, call it IMMEDIATELY. No deliberation.
+- ONE tool call per user request. If user asks multiple things, handle the FIRST one only.
+
+STRICT RULES:
 1. MAX 1 SENTENCE - SHORTER IS BETTER
 2. Patient question? Call get_patient_data, answer in 3 WORDS MAX
-3. "add labs"? Call create_lab_results(labs=[]), say "Done"
+3. "add labs"? Call add_results_panel(), say "Done"
 4. "create analysis"? Call create_agent_result(), say "Done"
-5. "stop"? Say "Okay" ONLY
+5. "stop"? Call stop_audio(), say "Okay" ONLY
+6. "generate report" or "patient report"? Call generate_patient_report(), say "Done"
+7. "legal report"? Call generate_legal_report(), say "Done"
+8. "DILI diagnosis"? Call generate_dili_diagnosis(), say "Done"
 
-NEVER explain. NEVER elaborate. NEVER ask follow-ups.
+NEVER explain. NEVER elaborate. NEVER think out loud. NEVER ask follow-ups.
 
 {base_prompt}
 
@@ -414,6 +483,11 @@ class VoiceSessionManager:
                 "response_modalities": ["AUDIO"],
                 "system_instruction": system_instruction,
                 "tools": [{"function_declarations": tool_declarations}],
+                "generation_config": {
+                    "thinking_config": {
+                        "thinking_budget": 0
+                    }
+                },
                 "speech_config": {
                     "voice_config": {
                         "prebuilt_voice_config": {
@@ -425,8 +499,8 @@ class VoiceSessionManager:
                 "realtime_input_config": {
                     "automatic_activity_detection": {
                         "disabled": False,
-                        "start_of_speech_sensitivity": "START_SENSITIVITY_LOW",
-                        "end_of_speech_sensitivity": "END_SENSITIVITY_LOW",
+                        "start_of_speech_sensitivity": "START_SENSITIVITY_HIGH",
+                        "end_of_speech_sensitivity": "END_SENSITIVITY_HIGH",
                         "prefix_padding_ms": 100,
                         "silence_duration_ms": 800
                     }

@@ -136,12 +136,13 @@ TOOLS AVAILABLE - USE THEM:
 - generate_dili_diagnosis, generate_patient_report, generate_legal_report: For reports
 - create_schedule: For appointments
 - send_notification: For alerts
-- create_lab_results: To add lab values
+- add_results_panel: To add lab values to board
 - create_agent_result: To add analysis cards
+- stop_audio: To stop speaking when user says "stop"
 
 ALWAYS use tools when user's request matches a capability. Keep responses brief.
 """
-    
+
     def _create_brief_summary(self) -> str:
         """Create a brief summary of patient data for system instruction (max 500 chars)."""
         if not self.context_data or not isinstance(self.context_data, list):
@@ -194,14 +195,23 @@ ALWAYS use tools when user's request matches a capability. Keep responses brief.
             if self.patient_summary:
                 context_section = f"\n\n--- CURRENT PATIENT SUMMARY ---\n{self.patient_summary}\n"
             
-            return f"""STRICT RULES - FAILURE TO FOLLOW = FAILURE:
+            return f"""ABSOLUTELY CRITICAL - ZERO THINKING:
+- Do NOT generate internal reasoning, planning, or thinking text.
+- Do NOT output text like "Processing...", "I'm now...", "Let me...", "I'll..."
+- When a tool should be called, call it IMMEDIATELY. No deliberation.
+- ONE tool call per user request. If user asks multiple things, handle the FIRST one only.
+
+STRICT RULES:
 1. MAX 1 SENTENCE - SHORTER IS BETTER
 2. Patient question? Call get_patient_data, answer in 3 WORDS MAX
-3. "add labs"? Call create_lab_results(labs=[]), say "Done"
+3. "add labs"? Call add_results_panel(), say "Done"
 4. "create analysis"? Call create_agent_result(), say "Done"
-5. "stop"? Say "Okay" ONLY
+5. "stop"? Call stop_audio(), say "Okay" ONLY
+6. "generate report" or "patient report"? Call generate_patient_report(), say "Done"
+7. "legal report"? Call generate_legal_report(), say "Done"
+8. "DILI diagnosis"? Call generate_dili_diagnosis(), say "Done"
 
-NEVER explain. NEVER elaborate. NEVER ask follow-ups.
+NEVER explain. NEVER elaborate. NEVER think out loud. NEVER ask follow-ups.
 
 {base_prompt}
 
@@ -228,12 +238,13 @@ TOOLS AVAILABLE - USE THEM:
 - generate_dili_diagnosis, generate_patient_report, generate_legal_report: For reports
 - create_schedule: For appointments
 - send_notification: For alerts
-- create_lab_results: To add lab values
+- add_results_panel: To add lab values to board
 - create_agent_result: To add analysis cards
+- stop_audio: To stop speaking when user says "stop"
 
 ALWAYS use tools when user's request matches a capability. Keep responses brief.
 """
-    
+
     def get_config(self):
         """Get Gemini Live API configuration with tool declarations"""
         # Define tool declarations for voice mode actions
@@ -469,6 +480,11 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
             "response_modalities": ["AUDIO"],
             "system_instruction": self.get_system_instruction(),
             "tools": [{"function_declarations": tool_declarations}],
+            "generation_config": {
+                "thinking_config": {
+                    "thinking_budget": 0
+                }
+            },
             "speech_config": {
                 "voice_config": {
                     "prebuilt_voice_config": {
@@ -480,8 +496,8 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
             "realtime_input_config": {
                 "automatic_activity_detection": {
                     "disabled": False,
-                    "start_of_speech_sensitivity": "START_SENSITIVITY_MEDIUM",
-                    "end_of_speech_sensitivity": "END_SENSITIVITY_LOW",
+                    "start_of_speech_sensitivity": "START_SENSITIVITY_HIGH",
+                    "end_of_speech_sensitivity": "END_SENSITIVITY_HIGH",
                     "prefix_padding_ms": 100,
                     "silence_duration_ms": 800
                 }

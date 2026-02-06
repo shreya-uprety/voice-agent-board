@@ -744,7 +744,10 @@ async def create_legal(payload):
     
     # AI now generates complete legalData structure with all forms
     # LLM generates: {title, component, props: {legalData: {...complete structure...}}}
-    # Pass it through as-is
+    # Safety: handle case where AI returns a list instead of dict
+    if isinstance(payload, list):
+        print(f"⚠️ create_legal received list, using first element")
+        payload = payload[0] if payload else {}
     props = payload.get('props', {})
     legal_data = props.get('legalData', {})
     
