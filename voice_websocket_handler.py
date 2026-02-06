@@ -1303,12 +1303,19 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                         logger.info(f"📅 Creating schedule: {context}")
 
                         try:
-                            # Use side_agent.create_schedule which generates proper scheduling structure
-                            schedule_result = await side_agent.create_schedule(self.patient_id, context)
+                            # side_agent.create_schedule(query, context) - query is the scheduling request,
+                            # patient_id is handled internally via patient_manager
+                            schedule_result = await side_agent.create_schedule(context)
                             logger.info(f"📊 Schedule result: {schedule_result}")
 
-                            # Auto-focus on the created schedule
-                            schedule_id = schedule_result.get('id') or schedule_result.get('result', {}).get('id')
+                            # ID is nested: side_agent returns {status, result: {status, id, api_response}}
+                            schedule_id = None
+                            inner_result = schedule_result.get('result', {})
+                            if isinstance(inner_result, dict):
+                                schedule_id = inner_result.get('id')
+                            if not schedule_id:
+                                schedule_id = schedule_result.get('id')
+
                             if schedule_id:
                                 logger.info(f"🎯 Auto-focusing on schedule: {schedule_id}")
                                 try:
@@ -1316,6 +1323,8 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                                     await canvas_ops.focus_item(schedule_id)
                                 except Exception as focus_error:
                                     logger.error(f"Failed to auto-focus on schedule: {focus_error}")
+                            else:
+                                logger.warning(f"⚠️ No schedule_id returned. Full result: {schedule_result}")
 
                             result = json.dumps({
                                 "status": "success",
