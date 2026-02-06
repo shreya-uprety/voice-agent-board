@@ -67,6 +67,7 @@ class VoiceWebSocketHandler:
         self.last_user_query = ""  # Track last user query for auto-focus fallback
         self._last_response_time = 0  # Track when last response was sent
         self._response_cooldown_seconds = 3  # Cooldown before accepting new queries
+        self._suppress_follow_up_audio = False  # Suppress duplicate audio after tool follow-ups
     
     def _get_client(self):
         """Lazy initialization of Gemini client - only when needed"""
@@ -1253,22 +1254,68 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                     elif function_name == "generate_dili_diagnosis":
                         # Generate DILI diagnosis report
                         logger.info("🔬 Generating DILI diagnosis...")
-                        diagnosis_result = await side_agent.create_dili_diagnosis()
-                        result = json.dumps({
-                            "status": "success",
-                            "message": "DILI diagnosis report generated and added to board",
-                            "summary": str(diagnosis_result.get('generated', {}))[:500]
-                        })
+                        try:
+                            diagnosis_result = await side_agent.create_dili_diagnosis()
+                            logger.info(f"📊 DILI diagnosis board_response: {diagnosis_result.get('board_response', {}).get('status')}")
+
+                            # ID is at board_response.data.id
+                            report_id = diagnosis_result.get('board_response', {}).get('data', {}).get('id')
+                            if report_id:
+                                logger.info(f"🎯 Auto-focusing on DILI diagnosis: {report_id}")
+                                try:
+                                    await asyncio.sleep(0.5)
+                                    await canvas_ops.focus_item(report_id)
+                                except Exception as focus_error:
+                                    logger.error(f"Failed to auto-focus on DILI diagnosis: {focus_error}")
+                            else:
+                                logger.warning(f"⚠️ No DILI report ID returned")
+
+                            result = json.dumps({
+                                "status": "success",
+                                "message": "DILI diagnosis report generated and added to board",
+                                "report_id": report_id
+                            })
+                        except Exception as e:
+                            logger.error(f"❌ DILI diagnosis failed: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            result = json.dumps({
+                                "status": "error",
+                                "message": f"Failed to generate DILI diagnosis: {str(e)}"
+                            })
                     
                     elif function_name == "generate_patient_report":
                         # Generate patient report
                         logger.info("📄 Generating patient report...")
-                        report_result = await side_agent.create_patient_report()
-                        result = json.dumps({
-                            "status": "success",
-                            "message": "Patient report generated and added to board",
-                            "summary": str(report_result.get('generated', {}))[:500]
-                        })
+                        try:
+                            report_result = await side_agent.create_patient_report()
+                            logger.info(f"📊 Patient report board_response: {report_result.get('board_response', {}).get('status')}")
+
+                            # ID is at board_response.data.id
+                            report_id = report_result.get('board_response', {}).get('data', {}).get('id')
+                            if report_id:
+                                logger.info(f"🎯 Auto-focusing on patient report: {report_id}")
+                                try:
+                                    await asyncio.sleep(0.5)
+                                    await canvas_ops.focus_item(report_id)
+                                except Exception as focus_error:
+                                    logger.error(f"Failed to auto-focus on patient report: {focus_error}")
+                            else:
+                                logger.warning(f"⚠️ No patient report ID returned")
+
+                            result = json.dumps({
+                                "status": "success",
+                                "message": "Patient report generated and added to board",
+                                "report_id": report_id
+                            })
+                        except Exception as e:
+                            logger.error(f"❌ Patient report failed: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            result = json.dumps({
+                                "status": "error",
+                                "message": f"Failed to generate patient report: {str(e)}"
+                            })
                     
                     elif function_name == "generate_legal_report":
                         # Generate legal report
@@ -1277,8 +1324,12 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                             legal_result = await side_agent.create_legal_doc()
                             logger.info(f"📊 Legal report result: {legal_result}")
 
-                            # Auto-focus on the newly created legal report using its ID
-                            report_id = legal_result.get('id') or legal_result.get('result', {}).get('id')
+                            # ID is at board_response.data.id (same structure as patient/DILI reports)
+                            report_id = (
+                                legal_result.get('board_response', {}).get('data', {}).get('id')
+                                or legal_result.get('id')
+                                or legal_result.get('result', {}).get('id')
+                            )
                             if report_id:
                                 logger.info(f"🎯 Auto-focusing on legal report: {report_id}")
                                 try:
@@ -1857,6 +1908,8 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
                         speech_detected = True
                         silence_count = 0
                         sent_count += 1
+                        # Reset audio suppression - user is speaking a new question
+                        self._suppress_follow_up_audio = False
                         await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
                     elif speech_detected:
                         # Speech was detected recently - send trailing silence
@@ -1911,22 +1964,26 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
 
                 response_count = 0
                 audio_chunks = 0
-                turn_has_text = False
+                tool_call_after_audio = False
+
+                # If previous turn had audio then a tool call, suppress this turn's audio
+                suppress_this_turn = self._suppress_follow_up_audio
+                if suppress_this_turn:
+                    logger.info(f"🔇 Turn {turn_number}: Suppressing follow-up audio (previous turn already spoke)")
+                    self._suppress_follow_up_audio = False
+
                 async for response in turn:
                     response_count += 1
 
-                    # DEBUG: Log response details to diagnose "Done" duplication
-                    # Check if response has server_content with model_turn for text
+                    # Check for interruption
                     if hasattr(response, 'server_content') and response.server_content:
                         sc = response.server_content
                         if hasattr(sc, 'model_turn') and sc.model_turn:
                             if hasattr(sc.model_turn, 'parts'):
                                 for part in sc.model_turn.parts:
                                     if hasattr(part, 'text') and part.text:
-                                        logger.info(f"📝 Gemini generated text: '{part.text}'")
-                                        turn_has_text = True
+                                        logger.info(f"📝 Gemini text: '{part.text}'")
 
-                        # Check for interruption
                         if sc.interrupted:
                             logger.info("🛑 User interrupted!")
                             await self.stop_speaking()
@@ -1938,12 +1995,15 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
 
                     # Handle audio data - stream immediately for low latency
                     if data := response.data:
-                        if not self.should_stop:  # Don't queue if stopped
+                        if not self.should_stop:
+                            # Suppress duplicate audio from tool follow-ups
+                            if suppress_this_turn or tool_call_after_audio:
+                                logger.info(f"🔇 Suppressing duplicate audio chunk ({len(data)} bytes)")
+                                continue
+
                             # Debug first audio chunk to verify format
                             if not first_audio_logged:
                                 logger.info(f"🎵 First audio chunk: {len(data)} bytes, type: {type(data)}")
-                                # PCM 16-bit mono at 24kHz: 2 bytes per sample, 24000 samples/sec
-                                # So 1 second = 48000 bytes, 100ms = 4800 bytes
                                 duration_ms = (len(data) / 2 / 24000) * 1000
                                 logger.info(f"🎵 Estimated duration: {duration_ms:.1f}ms at 24kHz")
                                 first_audio_logged = True
@@ -1953,16 +2013,19 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
 
                     # Handle tool calls - await them to ensure proper execution
                     if hasattr(response, 'tool_call') and response.tool_call:
-                        # Don't log here - let handle_tool_call log after dedup check
+                        if audio_chunks > 0:
+                            # Audio was already spoken in this turn BEFORE this tool call
+                            # Any audio Gemini generates after this tool's response will be a repeat
+                            tool_call_after_audio = True
+                            self._suppress_follow_up_audio = True
+                            logger.info(f"🔇 Audio already spoken ({audio_chunks} chunks), will suppress follow-up audio")
                         await self.handle_tool_call(response.tool_call)
 
-                # Only log if meaningful responses
+                # Log turn summary
                 if audio_chunks > 0:
                     logger.info(f"🔊 Turn {turn_number}: {audio_chunks} audio chunks sent to client")
-                if turn_has_text and audio_chunks > 0:
-                    logger.info("⚠️  Turn had both text and audio - check for duplication")
 
-                logger.info(f"🔄 === TURN {turn_number} END (responses: {response_count}, audio: {audio_chunks}) ===")
+                logger.info(f"🔄 === TURN {turn_number} END (responses: {response_count}, audio: {audio_chunks}, suppressed: {suppress_this_turn or tool_call_after_audio}) ===")
                         
         except Exception as e:
             logger.error(f"Error receiving audio: {e}")
