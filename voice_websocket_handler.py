@@ -51,7 +51,7 @@ class VoiceWebSocketHandler:
     """Handles real-time voice communication with Gemini Live API"""
     
     # Tool call deduplication - prevent same tool from being called multiple times
-    TOOL_DEDUP_WINDOW_SECONDS = 30  # Ignore duplicate calls within 30 seconds
+    TOOL_DEDUP_WINDOW_SECONDS = 5  # Ignore duplicate calls within 5 seconds (prevents rapid duplicates only)
     
     def __init__(self, websocket: WebSocket, patient_id: str):
         self.websocket = websocket
@@ -600,28 +600,8 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
             logger.error(f"⚠️ TODO animation error: {e}")
 
     def _is_duplicate_tool_call(self, function_name: str, arguments: dict) -> bool:
-        """Check if this tool call is a duplicate of a recent one"""
-        # Create a key from function name and arguments
-        args_key = json.dumps(arguments, sort_keys=True) if arguments else ""
-        dedup_key = f"{function_name}:{args_key}"
-
-        current_time = time.time()
-
-        # Clean up old entries
-        self._recent_tool_calls = {
-            k: v for k, v in self._recent_tool_calls.items()
-            if current_time - v < self.TOOL_DEDUP_WINDOW_SECONDS
-        }
-
-        # Check if this call was made recently
-        if dedup_key in self._recent_tool_calls:
-            elapsed = current_time - self._recent_tool_calls[dedup_key]
-            logger.warning(f"⚠️ DUPLICATE tool call detected: {function_name} (called {elapsed:.1f}s ago)")
-            return True
-
-        # CRITICAL: Record this call IMMEDIATELY before processing
-        # This prevents rapid duplicates in the same turn from both passing
-        self._recent_tool_calls[dedup_key] = current_time
+        """Disabled - finding root cause instead of blocking duplicates"""
+        # DISABLED: Instead of blocking duplicates, we should prevent them from happening
         return False
     
     async def handle_tool_call(self, tool_call):
@@ -629,9 +609,18 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
         try:
             function_responses = []
 
-            for fc in tool_call.function_calls:
+            # DEBUG: Log how many function calls are in this tool_call
+            num_calls = len(tool_call.function_calls)
+            logger.info(f"🔧 TOOL_CALL batch received with {num_calls} function call(s)")
+
+            for idx, fc in enumerate(tool_call.function_calls):
                 function_name = fc.name
                 arguments = dict(fc.args)
+
+                # DEBUG: Log each function call with index
+                logger.info(f"🔧 Tool call [{idx+1}/{num_calls}]: {function_name}")
+                logger.info(f"   Args: {arguments}")
+                logger.info(f"   Call ID: {fc.id}")
 
                 # Check for duplicate calls FIRST before any logging/notification
                 if self._is_duplicate_tool_call(function_name, arguments):
@@ -650,10 +639,6 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                     )
                     # Skip silently - don't spam logs or UI
                     continue
-
-                # Only log and notify for non-duplicate calls
-                logger.info(f"🔧 Tool call: {function_name}")
-                logger.info(f"   Args: {arguments}")
                 
                 # Notify UI that tool is executing
                 await self.send_tool_notification(function_name, "executing")
