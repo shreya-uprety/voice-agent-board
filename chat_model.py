@@ -213,6 +213,14 @@ async def chat_agent(chat_history: list[dict]) -> str:
     elif tool == "generate_legal_report":
         result = await side_agent.create_legal_doc()
         return f"✅ Legal report generated"
+
+    elif tool == "generate_ai_diagnosis":
+        result = await side_agent.create_ai_diagnosis()
+        return f"✅ AI diagnosis generated"
+
+    elif tool == "generate_ai_treatment_plan":
+        result = await side_agent.create_ai_treatment_plan()
+        return f"✅ AI treatment plan generated"
     
     else:
         # General Q&A - pass context directly (no redundant fetch)

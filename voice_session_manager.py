@@ -171,6 +171,32 @@ Documents patient's care, adverse events, and regulatory reporting requirements.
             }
         },
         {
+            "name": "generate_ai_diagnosis",
+            "description": """Generate an AI-powered clinical diagnosis report.
+
+Call this tool when user says: "AI diagnosis", "generate AI diagnosis", "clinical diagnosis", "MedForce diagnosis", "AI diagnostic report"
+
+Creates comprehensive physician-oriented diagnostic assessment with differential diagnosis ranking, clinical reasoning, evidence grading, and recommended workup.""",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        },
+        {
+            "name": "generate_ai_treatment_plan",
+            "description": """Generate an AI-powered treatment plan.
+
+Call this tool when user says: "AI treatment plan", "generate treatment plan", "treatment plan", "AI plan", "MedForce treatment", "AI treatment"
+
+Creates comprehensive treatment plan with pharmacotherapy, monitoring protocol, escalation pathways, and evidence-based recommendations.""",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        },
+        {
             "name": "create_schedule",
             "description": """Create a scheduling panel on the board for appointments.
 

@@ -372,6 +372,32 @@ Documents patient's care, adverse events, and regulatory reporting requirements.
                 }
             },
             {
+                "name": "generate_ai_diagnosis",
+                "description": """Generate an AI-powered clinical diagnosis report.
+
+Call this tool when user says: "AI diagnosis", "generate AI diagnosis", "clinical diagnosis", "MedForce diagnosis", "AI diagnostic report"
+
+Creates comprehensive physician-oriented diagnostic assessment with differential diagnosis ranking, clinical reasoning, evidence grading, and recommended workup.""",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            },
+            {
+                "name": "generate_ai_treatment_plan",
+                "description": """Generate an AI-powered treatment plan.
+
+Call this tool when user says: "AI treatment plan", "generate treatment plan", "treatment plan", "AI plan", "MedForce treatment", "AI treatment"
+
+Creates comprehensive treatment plan with pharmacotherapy, monitoring protocol, escalation pathways, and evidence-based recommendations.""",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            },
+            {
                 "name": "create_schedule",
                 "description": """Create a scheduling panel on the board for appointments.
 
@@ -1371,6 +1397,80 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                                 "message": f"Failed to generate legal report: {str(e)}"
                             })
                     
+                    elif function_name == "generate_ai_diagnosis":
+                        # Generate AI diagnosis report
+                        logger.info("🧠 Generating AI diagnosis...")
+                        try:
+                            ai_diag_result = await side_agent.create_ai_diagnosis()
+                            logger.info(f"📊 AI diagnosis result: {ai_diag_result}")
+
+                            report_id = (
+                                ai_diag_result.get('board_response', {}).get('data', {}).get('id')
+                                or ai_diag_result.get('id')
+                                or ai_diag_result.get('result', {}).get('id')
+                            )
+                            if report_id:
+                                logger.info(f"🎯 Auto-focusing on AI diagnosis: {report_id}")
+                                try:
+                                    await asyncio.sleep(0.5)
+                                    focus_result = await canvas_ops.focus_item(report_id)
+                                    logger.info(f"✅ Auto-focused on AI diagnosis: {focus_result}")
+                                except Exception as focus_error:
+                                    logger.error(f"Failed to auto-focus on AI diagnosis: {focus_error}")
+                            else:
+                                logger.warning("⚠️ No report ID returned, cannot auto-focus")
+
+                            result = json.dumps({
+                                "status": "success",
+                                "message": "AI clinical diagnosis generated and added to board",
+                                "report_id": report_id
+                            })
+                        except Exception as e:
+                            logger.error(f"❌ AI diagnosis generation failed: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            result = json.dumps({
+                                "status": "error",
+                                "message": f"Failed to generate AI diagnosis: {str(e)}"
+                            })
+
+                    elif function_name == "generate_ai_treatment_plan":
+                        # Generate AI treatment plan
+                        logger.info("📋 Generating AI treatment plan...")
+                        try:
+                            ai_plan_result = await side_agent.create_ai_treatment_plan()
+                            logger.info(f"📊 AI treatment plan result: {ai_plan_result}")
+
+                            report_id = (
+                                ai_plan_result.get('board_response', {}).get('data', {}).get('id')
+                                or ai_plan_result.get('id')
+                                or ai_plan_result.get('result', {}).get('id')
+                            )
+                            if report_id:
+                                logger.info(f"🎯 Auto-focusing on AI treatment plan: {report_id}")
+                                try:
+                                    await asyncio.sleep(0.5)
+                                    focus_result = await canvas_ops.focus_item(report_id)
+                                    logger.info(f"✅ Auto-focused on AI treatment plan: {focus_result}")
+                                except Exception as focus_error:
+                                    logger.error(f"Failed to auto-focus on AI treatment plan: {focus_error}")
+                            else:
+                                logger.warning("⚠️ No report ID returned, cannot auto-focus")
+
+                            result = json.dumps({
+                                "status": "success",
+                                "message": "AI treatment plan generated and added to board",
+                                "report_id": report_id
+                            })
+                        except Exception as e:
+                            logger.error(f"❌ AI treatment plan generation failed: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            result = json.dumps({
+                                "status": "error",
+                                "message": f"Failed to generate AI treatment plan: {str(e)}"
+                            })
+
                     elif function_name == "create_schedule":
                         # Create schedule panel using side_agent for proper structure
                         context = arguments.get("context", "Follow-up appointment scheduling")

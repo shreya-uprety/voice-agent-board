@@ -787,3 +787,99 @@ async def create_legal(payload):
         with open(f"{config.output_dir}/legal_create_response.json", "w", encoding="utf-8") as f:
             json.dump({"status": "error", "error": str(e), "payload": api_payload}, f, ensure_ascii=False, indent=4)
         return {"status": "local", "message": str(e), "data": api_payload}
+
+async def create_ai_diagnosis(payload):
+    """Create AI diagnosis report on board"""
+    url = BASE_URL + "/api/ai-diagnosis"
+
+    # Safety: handle case where AI returns a list instead of dict
+    if isinstance(payload, list):
+        print(f"⚠️ create_ai_diagnosis received list, using first element")
+        payload = payload[0] if payload else {}
+    props = payload.get('props', {})
+    ai_diagnosis_data = props.get('aiDiagnosisData', {})
+
+    api_payload = {
+        'title': payload.get('title', 'AI Clinical Diagnosis'),
+        'component': payload.get('component', 'AIDiagnosis'),
+        'aiDiagnosisData': ai_diagnosis_data,
+        'zone': "medforce-ai-diagnosis-zone",
+        'patientId': patient_manager.get_patient_id()
+    }
+
+    with open(f"{config.output_dir}/ai_diagnosis_payload.json", "w", encoding="utf-8") as f:
+        json.dump(api_payload, f, ensure_ascii=False, indent=4)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=api_payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                print(f"AI Diagnosis API status: {response.status}")
+                response_text = await response.text()
+                print(f"AI Diagnosis API response: {response_text[:500]}")
+
+                if response.status in [200, 201]:
+                    try:
+                        data = json.loads(response_text)
+                    except:
+                        data = {"raw": response_text}
+                    with open(f"{config.output_dir}/ai_diagnosis_response.json", "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=4)
+                    return {"status": "success", "data": data, "payload": api_payload}
+                else:
+                    print(f"⚠️ AI Diagnosis API returned {response.status}: {response_text}")
+                    with open(f"{config.output_dir}/ai_diagnosis_response.json", "w", encoding="utf-8") as f:
+                        json.dump({"status": "local", "code": response.status, "error": response_text, "payload": api_payload}, f, ensure_ascii=False, indent=4)
+                    return {"status": "local", "message": f"AI diagnosis saved locally (API returned {response.status})", "data": api_payload}
+    except Exception as e:
+        print(f"❌ Error creating AI diagnosis: {e}")
+        with open(f"{config.output_dir}/ai_diagnosis_response.json", "w", encoding="utf-8") as f:
+            json.dump({"status": "error", "error": str(e), "payload": api_payload}, f, ensure_ascii=False, indent=4)
+        return {"status": "local", "message": str(e), "data": api_payload}
+
+async def create_ai_treatment_plan(payload):
+    """Create AI treatment plan on board"""
+    url = BASE_URL + "/api/ai-treatment-plan"
+
+    # Safety: handle case where AI returns a list instead of dict
+    if isinstance(payload, list):
+        print(f"⚠️ create_ai_treatment_plan received list, using first element")
+        payload = payload[0] if payload else {}
+    props = payload.get('props', {})
+    ai_treatment_data = props.get('aiTreatmentData', {})
+
+    api_payload = {
+        'title': payload.get('title', 'AI Treatment Plan'),
+        'component': payload.get('component', 'AITreatmentPlan'),
+        'aiTreatmentData': ai_treatment_data,
+        'zone': "ai-plan-zone",
+        'patientId': patient_manager.get_patient_id()
+    }
+
+    with open(f"{config.output_dir}/ai_treatment_plan_payload.json", "w", encoding="utf-8") as f:
+        json.dump(api_payload, f, ensure_ascii=False, indent=4)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=api_payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                print(f"AI Treatment Plan API status: {response.status}")
+                response_text = await response.text()
+                print(f"AI Treatment Plan API response: {response_text[:500]}")
+
+                if response.status in [200, 201]:
+                    try:
+                        data = json.loads(response_text)
+                    except:
+                        data = {"raw": response_text}
+                    with open(f"{config.output_dir}/ai_treatment_plan_response.json", "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=4)
+                    return {"status": "success", "data": data, "payload": api_payload}
+                else:
+                    print(f"⚠️ AI Treatment Plan API returned {response.status}: {response_text}")
+                    with open(f"{config.output_dir}/ai_treatment_plan_response.json", "w", encoding="utf-8") as f:
+                        json.dump({"status": "local", "code": response.status, "error": response_text, "payload": api_payload}, f, ensure_ascii=False, indent=4)
+                    return {"status": "local", "message": f"AI treatment plan saved locally (API returned {response.status})", "data": api_payload}
+    except Exception as e:
+        print(f"❌ Error creating AI treatment plan: {e}")
+        with open(f"{config.output_dir}/ai_treatment_plan_response.json", "w", encoding="utf-8") as f:
+            json.dump({"status": "error", "error": str(e), "payload": api_payload}, f, ensure_ascii=False, indent=4)
+        return {"status": "local", "message": str(e), "data": api_payload}

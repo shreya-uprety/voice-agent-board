@@ -83,6 +83,10 @@ def parse_tool(query):
     # Questions about lab values should be handled as general queries (answered, not created)
     if any(kw in q_lower for kw in ['lab result', 'lab value', 'blood test', 'liver function', 'lft', 'what are the lab', 'show lab', 'tell me the lab']):
         return {"query": query, "tool": "general"}
+    if any(kw in q_lower for kw in ['ai diagnosis', 'ai diagnostic', 'generate ai diagnosis', 'clinical diagnosis', 'medforce diagnosis']):
+        return {"query": query, "tool": "generate_ai_diagnosis"}
+    if any(kw in q_lower for kw in ['ai treatment', 'ai plan', 'generate treatment', 'medforce treatment', 'ai treatment plan']):
+        return {"query": query, "tool": "generate_ai_treatment_plan"}
     if any(kw in q_lower for kw in ['diagnosis', 'dili diagnosis', 'liver injury diagnosis']):
         return {"query": query, "tool": "generate_diagnosis"}
     if any(kw in q_lower for kw in ['patient report', 'summary report', 'generate report']):
@@ -708,6 +712,104 @@ async def generate_legal_report():
         json.dump(result, f, indent=4)
 
     return result
+
+
+# ============================================================================
+# AI DIAGNOSIS & AI TREATMENT PLAN
+# ============================================================================
+
+async def generate_ai_diagnosis():
+    """Generate AI clinical diagnosis JSON"""
+    with open("system_prompts/ai_diagnosis_prompt.md", "r", encoding="utf-8") as f:
+        SYSTEM_PROMPT = f.read()
+
+    model = genai.GenerativeModel(MODEL, system_instruction=SYSTEM_PROMPT)
+    ehr_data = await load_ehr()
+
+    prompt = f"Generate an AI clinical diagnosis based on patient data.\n\nPatient data: {ehr_data}"
+
+    gen_config = genai.GenerationConfig(
+        response_mime_type="application/json",
+        temperature=0.7,
+    )
+    # Run synchronous generate_content in thread to avoid blocking event loop
+    resp = await asyncio.to_thread(model.generate_content, prompt, generation_config=gen_config)
+
+    result = json.loads(resp.text)
+    # AI sometimes returns a list instead of dict - handle gracefully
+    if isinstance(result, list):
+        print(f"⚠️ AI diagnosis returned list ({len(result)} items), using first element")
+        result = result[0] if result else {}
+    with open(f"{config.output_dir}/generate_ai_diagnosis.json", "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=4)
+
+    return result
+
+
+async def create_ai_diagnosis():
+    """Generate AI diagnosis and post to board directly"""
+    print("🧠 Generating AI diagnosis...")
+
+    try:
+        result = await generate_ai_diagnosis()
+        print("✅ AI diagnosis generated successfully")
+
+        # Post to board
+        board_response = await canvas_ops.create_ai_diagnosis(result)
+        print(f"✅ AI diagnosis posted to board")
+
+        return {"generated": result, "board_response": board_response}
+
+    except Exception as e:
+        print(f"❌ AI diagnosis error: {e}")
+        return {"generated": None, "board_response": {"status": "error", "message": str(e)}}
+
+
+async def generate_ai_treatment_plan():
+    """Generate AI treatment plan JSON"""
+    with open("system_prompts/ai_treatment_plan_prompt.md", "r", encoding="utf-8") as f:
+        SYSTEM_PROMPT = f.read()
+
+    model = genai.GenerativeModel(MODEL, system_instruction=SYSTEM_PROMPT)
+    ehr_data = await load_ehr()
+
+    prompt = f"Generate an AI treatment plan based on patient data.\n\nPatient data: {ehr_data}"
+
+    gen_config = genai.GenerationConfig(
+        response_mime_type="application/json",
+        temperature=0.7,
+    )
+    # Run synchronous generate_content in thread to avoid blocking event loop
+    resp = await asyncio.to_thread(model.generate_content, prompt, generation_config=gen_config)
+
+    result = json.loads(resp.text)
+    # AI sometimes returns a list instead of dict - handle gracefully
+    if isinstance(result, list):
+        print(f"⚠️ AI treatment plan returned list ({len(result)} items), using first element")
+        result = result[0] if result else {}
+    with open(f"{config.output_dir}/generate_ai_treatment_plan.json", "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=4)
+
+    return result
+
+
+async def create_ai_treatment_plan():
+    """Generate AI treatment plan and post to board directly"""
+    print("📋 Generating AI treatment plan...")
+
+    try:
+        result = await generate_ai_treatment_plan()
+        print("✅ AI treatment plan generated successfully")
+
+        # Post to board
+        board_response = await canvas_ops.create_ai_treatment_plan(result)
+        print(f"✅ AI treatment plan posted to board")
+
+        return {"generated": result, "board_response": board_response}
+
+    except Exception as e:
+        print(f"❌ AI treatment plan error: {e}")
+        return {"generated": None, "board_response": {"status": "error", "message": str(e)}}
 
 
 # ============================================================================
