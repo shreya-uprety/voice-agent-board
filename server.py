@@ -546,11 +546,21 @@ async def websocket_voice(websocket: WebSocket, patient_id: str):
             except:
                 pass
     else:
-        # Regular direct connection with patient_id
-        logger.info(f"🎙️ Voice WebSocket connected for patient: {patient_id}")
-        patient_manager.set_patient_id(patient_id, quiet=True)
+        # Session not found or not ready — check if patient_id is actually a session_id
+        # and recover the real patient_id from the persistent mapping
+        actual_patient_id = patient_id
+        if voice_session_manager is not None:
+            mapped_patient = voice_session_manager.get_patient_for_session(patient_id)
+            if mapped_patient:
+                logger.info(f"🔄 Recovered patient_id={mapped_patient} from session mapping for session_id={patient_id}")
+                actual_patient_id = mapped_patient
+            else:
+                logger.info(f"🎙️ No session mapping found for {patient_id}, using as patient_id directly")
+
+        logger.info(f"🎙️ Voice WebSocket: direct connection for patient: {actual_patient_id}")
+        patient_manager.set_patient_id(actual_patient_id, quiet=True)
         try:
-            handler = VoiceWebSocketHandler(websocket, patient_id)
+            handler = VoiceWebSocketHandler(websocket, actual_patient_id)
             await handler.run()
         except Exception as e:
             logger.error(f"Voice WebSocket error: {e}")

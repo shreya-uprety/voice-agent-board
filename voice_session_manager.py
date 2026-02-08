@@ -410,9 +410,11 @@ class VoiceSessionManager:
     def __init__(self):
         if self._initialized:
             return
-        
+
         self._initialized = True
         self.sessions: Dict[str, VoiceSession] = {}
+        # Persistent mapping of session_id → patient_id (survives session cleanup)
+        self._session_patient_map: Dict[str, str] = {}
         self._client = None
         self._lock = asyncio.Lock()
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -488,12 +490,14 @@ class VoiceSessionManager:
         
         async with self._lock:
             self.sessions[session_id] = session
-        
+            # Persist session_id → patient_id mapping (survives session cleanup/Cloud Run instance issues)
+            self._session_patient_map[session_id] = patient_id
+
         # Start connection in background
         session._connect_task = asyncio.create_task(
             self._connect_session(session_id)
         )
-        
+
         logger.info(f"📝 Created session {session_id} for patient {patient_id}")
         return session_id
     
@@ -602,12 +606,37 @@ class VoiceSessionManager:
         }
     
     async def get_session(self, session_id: str) -> Optional[VoiceSession]:
-        """Get a ready session"""
+        """Get a ready session. If session is still connecting, wait up to 30s for it."""
         session = self.sessions.get(session_id)
-        if session and session.status == SessionStatus.READY:
+        if not session:
+            return None
+
+        # If session is still connecting, wait for it (frontend may connect slightly before ready)
+        if session.status == SessionStatus.CONNECTING:
+            logger.info(f"⏳ Session {session_id} still connecting, waiting...")
+            for _ in range(60):  # Wait up to 30 seconds (60 * 0.5s)
+                await asyncio.sleep(0.5)
+                if session.status == SessionStatus.READY:
+                    break
+                if session.status in (SessionStatus.ERROR, SessionStatus.CLOSED):
+                    logger.error(f"❌ Session {session_id} failed while waiting: {session.error_message}")
+                    return None
+
+        if session.status == SessionStatus.READY:
             session.status = SessionStatus.IN_USE
             return session
+
+        logger.warning(f"⚠️ Session {session_id} not ready, status: {session.status.value}")
         return None
+
+    def get_patient_for_session(self, session_id: str) -> Optional[str]:
+        """Get patient_id for a session_id, even if the session has been closed/cleaned up."""
+        # Check active sessions first
+        session = self.sessions.get(session_id)
+        if session:
+            return session.patient_id
+        # Check persistent mapping
+        return self._session_patient_map.get(session_id)
     
     async def release_session(self, session_id: str):
         """Release a session back to ready state"""
