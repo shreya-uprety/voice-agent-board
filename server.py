@@ -516,10 +516,13 @@ async def websocket_voice(websocket: WebSocket, patient_id: str):
     if VoiceWebSocketHandler is None:
         await websocket.close(code=1011, reason="Voice service unavailable")
         return
-    
+
     await websocket.accept()
     logger.info(f"🎙️ Voice WebSocket connected for patient: {patient_id}")
-    
+
+    # Set patient_id so canvas_ops and side_agent use the correct patient
+    patient_manager.set_patient_id(patient_id, quiet=True)
+
     try:
         handler = VoiceWebSocketHandler(websocket, patient_id)
         await handler.run()
@@ -540,7 +543,10 @@ async def start_voice_session(patient_id: str):
     Returns immediately with session_id.
     """
     logger.info(f"🎙️ Voice start request received for patient: {patient_id}")
-    
+
+    # Set patient_id so canvas_ops and side_agent use the correct patient
+    patient_manager.set_patient_id(patient_id, quiet=True)
+
     if voice_session_manager is None:
         logger.error("❌ Voice session manager is None!")
         raise HTTPException(status_code=503, detail="Voice session manager not available")
