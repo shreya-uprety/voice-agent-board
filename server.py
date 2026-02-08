@@ -512,26 +512,52 @@ async def websocket_chat(websocket: WebSocket, patient_id: str):
 async def websocket_voice(websocket: WebSocket, patient_id: str):
     """
     WebSocket endpoint for real-time voice communication using Gemini Live API.
+    Also handles two-phase connections where frontend connects here with a session_id
+    instead of using /ws/voice-session/{session_id}.
     """
     if VoiceWebSocketHandler is None:
         await websocket.close(code=1011, reason="Voice service unavailable")
         return
 
+    # Check if patient_id is actually a session_id from two-phase connection
+    session = None
+    if voice_session_manager is not None:
+        session = await voice_session_manager.get_session(patient_id)
+
     await websocket.accept()
-    logger.info(f"🎙️ Voice WebSocket connected for patient: {patient_id}")
 
-    # Set patient_id so canvas_ops and side_agent use the correct patient
-    patient_manager.set_patient_id(patient_id, quiet=True)
-
-    try:
-        handler = VoiceWebSocketHandler(websocket, patient_id)
-        await handler.run()
-    except Exception as e:
-        logger.error(f"Voice WebSocket error: {e}")
+    if session is not None:
+        # This is a pre-connected session — use it
+        logger.info(f"🎙️ Voice WebSocket: detected session_id={patient_id}, using pre-connected session for patient {session.patient_id}")
+        patient_manager.set_patient_id(session.patient_id, quiet=True)
         try:
-            await websocket.close()
-        except:
-            pass
+            handler = VoiceWebSocketHandler(websocket, session.patient_id)
+            handler.session = session.gemini_session
+            handler.audio_in_queue = session.audio_in_queue
+            handler.out_queue = session.out_queue
+            handler.client = session.client
+            await handler.run_with_session()
+        except Exception as e:
+            logger.error(f"Voice WebSocket error (pre-connected): {e}")
+        finally:
+            await voice_session_manager.release_session(patient_id)
+            try:
+                await websocket.close()
+            except:
+                pass
+    else:
+        # Regular direct connection with patient_id
+        logger.info(f"🎙️ Voice WebSocket connected for patient: {patient_id}")
+        patient_manager.set_patient_id(patient_id, quiet=True)
+        try:
+            handler = VoiceWebSocketHandler(websocket, patient_id)
+            await handler.run()
+        except Exception as e:
+            logger.error(f"Voice WebSocket error: {e}")
+            try:
+                await websocket.close()
+            except:
+                pass
 
 
 # ========== TWO-PHASE VOICE CONNECTION ==========
