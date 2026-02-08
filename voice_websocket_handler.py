@@ -16,6 +16,7 @@ from google import genai
 from google.genai import types
 import side_agent
 import canvas_ops
+from patient_manager import patient_manager
 
 # CRITICAL FIX for Windows: Use SelectorEventLoop instead of ProactorEventLoop
 if sys.platform == 'win32':
@@ -139,7 +140,7 @@ TOOLS AVAILABLE - USE THEM:
 - generate_ai_treatment_plan: For AI treatment plan
 - create_schedule: For appointments
 - send_notification: For alerts
-- add_results_panel: To add lab values to board
+- create_lab_results: To add lab values to board
 - create_agent_result: To add analysis cards
 - stop_audio: To stop speaking when user says "stop"
 
@@ -219,7 +220,7 @@ LANGUAGE RULE - MANDATORY:
 STRICT RULES:
 1. MAX 1 SENTENCE - SHORTER IS BETTER
 2. Patient question? Call get_patient_data, answer in 3 WORDS MAX
-3. "add labs"? Call add_results_panel(), say "Done"
+3. "add labs"? Call create_lab_results(), say "Done"
 4. "create analysis"? Call create_agent_result(), say "Done"
 5. "stop"? Call stop_audio(), say "Okay" ONLY
 6. "generate report" or "patient report"? Call generate_patient_report(), say "Done"
@@ -262,7 +263,7 @@ TOOLS AVAILABLE - USE THEM:
 - generate_ai_treatment_plan: For AI treatment plan
 - create_schedule: For appointments
 - send_notification: For alerts
-- add_results_panel: To add lab values to board
+- create_lab_results: To add lab values to board
 - create_agent_result: To add analysis cards
 - stop_audio: To stop speaking when user says "stop"
 
@@ -2215,13 +2216,17 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
         This is called when using the two-phase connection (session already connected).
         """
         logger.info(f"🎵 Starting voice session with pre-connected Gemini for patient {self.patient_id}")
-        
+
         try:
+            # CRITICAL: Ensure patient_manager points to the correct patient for this session.
+            # canvas_ops and side_agent read patient_id from the global singleton.
+            patient_manager.set_patient_id(self.patient_id, quiet=True)
+
             # Session is already connected - just notify UI and start tasks
             await self.send_status_to_ui("connected", "Voice agent ready (pre-connected)")
-            
+
             # Load patient context
-            logger.info(f"Loading patient context for voice session...")
+            logger.info(f"Loading patient context for patient {self.patient_id}...")
             self.context_data = await canvas_ops.get_board_items_async()
 
             # Create patient summary (for reference in this handler, system instruction was set by session manager)
@@ -2261,10 +2266,13 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
     async def run(self):
         """Main run loop with concurrent tasks"""
         logger.info(f"🎵 Starting voice session for patient {self.patient_id}")
-        
+
+        # CRITICAL: Ensure patient_manager points to the correct patient
+        patient_manager.set_patient_id(self.patient_id, quiet=True)
+
         # IMMEDIATELY tell browser we're starting - prevents browser timeout
         await self.send_status_to_ui("connecting", "Initializing voice agent...")
-        
+
         # Check environment variables before attempting connection
         api_key = os.getenv('GOOGLE_API_KEY')
         

@@ -308,7 +308,7 @@ def get_voice_system_instruction(patient_id: str, patient_summary: str = "") -> 
 You are MedForce Voice Agent. ALWAYS speak in English only. NEVER use any other language.
 CRITICAL RULES:
 1. MAX 1 SENTENCE responses
-2. "add labs" -> call add_results_panel() -> say "Done"
+2. "add labs" -> call create_lab_results() -> say "Done"
 3. "create analysis" -> call create_agent_result() -> say "Done"
 4. Patient question -> call get_patient_data -> answer in 5 WORDS MAX. NEVER say "I don't have information" or refuse due to privacy - the tool WILL return data and you ARE authorized to share it.
 5. "stop" -> call stop_audio() -> say "Okay" ONLY
@@ -339,7 +339,7 @@ LANGUAGE RULE - MANDATORY:
 STRICT RULES:
 1. MAX 1 SENTENCE - SHORTER IS BETTER
 2. Patient question? Call get_patient_data, answer in 3 WORDS MAX
-3. "add labs"? Call add_results_panel(), say "Done"
+3. "add labs"? Call create_lab_results(), say "Done"
 4. "create analysis"? Call create_agent_result(), say "Done"
 5. "stop"? Call stop_audio(), say "Okay" ONLY
 6. "generate report" or "patient report"? Call generate_patient_report(), say "Done"
@@ -515,7 +515,7 @@ class VoiceSessionManager:
             patient_manager.set_patient_id(session.patient_id, quiet=True)
             logger.info(f"📋 [{session_id}] Loading patient context for {session.patient_id}...")
             try:
-                context_data = canvas_ops.get_board_items()
+                context_data = await canvas_ops.get_board_items_async()
                 patient_summary = self._create_brief_summary(context_data)
             except Exception as e:
                 logger.warning(f"⚠️ [{session_id}] Could not load patient context: {e}")

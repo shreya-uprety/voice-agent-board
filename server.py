@@ -540,7 +540,7 @@ async def websocket_voice(websocket: WebSocket, patient_id: str):
         except Exception as e:
             logger.error(f"Voice WebSocket error (pre-connected): {e}")
         finally:
-            await voice_session_manager.release_session(patient_id)
+            await voice_session_manager.close_session(patient_id)
             try:
                 await websocket.close()
             except:
@@ -630,8 +630,11 @@ async def websocket_voice_session(websocket: WebSocket, session_id: str):
         return
     
     await websocket.accept()
-    logger.info(f"🎙️ Voice WebSocket connected for pre-established session: {session_id}")
-    
+    logger.info(f"🎙️ Voice WebSocket connected for pre-established session: {session_id}, patient: {session.patient_id}")
+
+    # CRITICAL: Set patient_id so canvas_ops and side_agent target the correct patient
+    patient_manager.set_patient_id(session.patient_id, quiet=True)
+
     try:
         if VoiceWebSocketHandler is not None:
             handler = VoiceWebSocketHandler(websocket, session.patient_id)
@@ -639,14 +642,14 @@ async def websocket_voice_session(websocket: WebSocket, session_id: str):
             handler.audio_in_queue = session.audio_in_queue
             handler.out_queue = session.out_queue
             handler.client = session.client
-            
+
             await handler.run_with_session()
         else:
             await websocket.send_json({"type": "error", "message": "Voice handler not available"})
     except Exception as e:
         logger.error(f"Voice WebSocket error: {e}")
     finally:
-        await voice_session_manager.release_session(session_id)
+        await voice_session_manager.close_session(session_id)
         try:
             await websocket.close()
         except:
