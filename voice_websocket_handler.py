@@ -123,17 +123,20 @@ Remember: Use patient_id "{self.patient_id}" when calling any tools that need it
             traceback.print_exc()
             # Fallback to basic prompt with tool instructions
             return f"""You are MedForce Voice Agent — a real-time conversational AI assistant for clinical board operations.
+ALWAYS speak in English only. NEVER use any other language.
 
 Keep responses VERY SHORT - 1-2 sentences maximum for voice interaction.
 Current Patient ID: {self.patient_id}
 Board URL: https://iso-clinic-v3-481780815788.europe-west1.run.app/board/{self.patient_id}
 
 TOOLS AVAILABLE - USE THEM:
-- get_patient_data: For ANY patient questions (name, labs, meds, diagnosis, history)
+- get_patient_data: For ANY patient questions (name, labs, meds, diagnosis, history). ALWAYS call this - NEVER say "I don't have information".
 - focus_board_item: To navigate/show items on board ("show me labs", "focus on medications")
 - create_task: To create TODO items ("create task for follow-up")
 - send_to_easl: For clinical guideline questions
 - generate_dili_diagnosis, generate_patient_report, generate_legal_report: For reports
+- generate_ai_diagnosis: For AI clinical diagnosis
+- generate_ai_treatment_plan: For AI treatment plan
 - create_schedule: For appointments
 - send_notification: For alerts
 - add_results_panel: To add lab values to board
@@ -189,7 +192,12 @@ ALWAYS use tools when user's request matches a capability. Keep responses brief.
             # Load the voice-specific system prompt that includes tool usage instructions
             with open("system_prompts/voice_agent_system.md", "r", encoding="utf-8") as f:
                 base_prompt = f.read()
-            
+
+            # Ensure patient_summary is generated if context_data is available
+            if not self.patient_summary and self.context_data:
+                self.patient_summary = self._create_brief_summary()
+                logger.info(f"📋 Generated patient summary on-the-fly: {self.patient_summary[:100] if self.patient_summary else 'EMPTY'}")
+
             # Add patient-specific context
             context_section = ""
             if self.patient_summary:
@@ -201,6 +209,11 @@ ALWAYS use tools when user's request matches a capability. Keep responses brief.
 - When a tool should be called, call it IMMEDIATELY. No deliberation.
 - ONE tool call per user request. If user asks multiple things, handle the FIRST one only.
 
+LANGUAGE RULE - MANDATORY:
+- You MUST ONLY speak and respond in English. NEVER use any other language.
+- Even if the user speaks in another language, ALWAYS reply in English.
+- This is a strict requirement with no exceptions.
+
 STRICT RULES:
 1. MAX 1 SENTENCE - SHORTER IS BETTER
 2. Patient question? Call get_patient_data, answer in 3 WORDS MAX
@@ -210,6 +223,10 @@ STRICT RULES:
 6. "generate report" or "patient report"? Call generate_patient_report(), say "Done"
 7. "legal report"? Call generate_legal_report(), say "Done"
 8. "DILI diagnosis"? Call generate_dili_diagnosis(), say "Done"
+9. "AI diagnosis"? Call generate_ai_diagnosis(), say "Done"
+10. "AI treatment plan" or "treatment plan"? Call generate_ai_treatment_plan(), say "Done"
+
+CRITICAL: You DO have access to patient data. When asked about the patient, ALWAYS call get_patient_data tool. NEVER say "I don't have access to patient information" - the tool WILL return the data.
 
 NEVER explain. NEVER elaborate. NEVER think out loud. NEVER ask follow-ups.
 
@@ -225,17 +242,20 @@ Remember: Use patient_id "{self.patient_id}" when calling any tools that need it
             logger.error(f"Failed to load voice system prompt: {e}")
             # Fallback to basic prompt with tool instructions
             return f"""You are MedForce Voice Agent — a real-time AI assistant for clinical board operations.
+ALWAYS speak in English only. NEVER use any other language.
 
 Keep responses VERY SHORT - 1-2 sentences maximum for voice interaction.
 Current Patient ID: {self.patient_id}
 Board URL: https://iso-clinic-v3-481780815788.europe-west1.run.app/board/{self.patient_id}
 
 TOOLS AVAILABLE - USE THEM:
-- get_patient_data: For ANY patient questions (name, labs, meds, diagnosis, history)
+- get_patient_data: For ANY patient questions (name, labs, meds, diagnosis, history). ALWAYS call this - NEVER say "I don't have information".
 - focus_board_item: To navigate/show items on board ("show me labs", "focus on medications")
 - create_task: To create TODO items ("create task for follow-up")
 - send_to_easl: For clinical guideline questions
 - generate_dili_diagnosis, generate_patient_report, generate_legal_report: For reports
+- generate_ai_diagnosis: For AI clinical diagnosis
+- generate_ai_treatment_plan: For AI treatment plan
 - create_schedule: For appointments
 - send_notification: For alerts
 - add_results_panel: To add lab values to board
@@ -2199,7 +2219,11 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
             # Load patient context
             logger.info(f"Loading patient context for voice session...")
             self.context_data = await canvas_ops.get_board_items_async()
-            
+
+            # Create patient summary (for reference in this handler, system instruction was set by session manager)
+            self.patient_summary = self._create_brief_summary()
+            logger.info(f"📋 Patient summary loaded: {self.patient_summary[:200] if self.patient_summary else 'EMPTY'}")
+
             # Ensure queues are set
             if self.audio_in_queue is None:
                 self.audio_in_queue = asyncio.Queue()
@@ -2254,10 +2278,14 @@ This analysis was generated via Voice Agent at {now.isoformat()}"""
             # Load patient context using canvas_ops (agent-2.9 way) - use async version
             logger.info(f"Loading patient context for voice session...")
             self.context_data = await canvas_ops.get_board_items_async()
-            
+
+            # Create patient summary for system instruction BEFORE get_config()
+            self.patient_summary = self._create_brief_summary()
+            logger.info(f"📋 Patient summary for system instruction: {self.patient_summary[:200] if self.patient_summary else 'EMPTY'}")
+
             # Send another status update
             await self.send_status_to_ui("connecting", "Preparing configuration...")
-            
+
             # Get the FULL config with system instructions, tools, and generation settings
             config = self.get_config()
             
