@@ -40,6 +40,7 @@ google.genai.live.ws_connect = patched_ws_connect
 
 from google import genai
 import canvas_ops
+from patient_manager import patient_manager
 
 logger = logging.getLogger("voice-session-manager")
 
@@ -505,7 +506,10 @@ class VoiceSessionManager:
             client = self._get_client()
             
             # Load patient context for system instruction
-            logger.info(f"📋 [{session_id}] Loading patient context...")
+            # CRITICAL: Set patient_id on global singleton before fetching board items
+            # This background task may run after another request has changed the global patient_id
+            patient_manager.set_patient_id(session.patient_id, quiet=True)
+            logger.info(f"📋 [{session_id}] Loading patient context for {session.patient_id}...")
             try:
                 context_data = canvas_ops.get_board_items()
                 patient_summary = self._create_brief_summary(context_data)
