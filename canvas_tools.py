@@ -43,11 +43,15 @@ class CanvasTools:
             logger.info(f"Focusing on board item: {object_description} for patient {patient_id}")
             
             # Use objectId as the API expects (not objectDescription)
+            # Tighter zoom for items inside zones (raw reports, referral images)
+            obj_lower = object_description.lower() if object_description else ""
+            zoom = 1.5 if obj_lower.startswith("raw-") or obj_lower.startswith("referral-letter") else 0.8
+
             focus_payload = {
                 "patientId": patient_id,
                 "objectId": object_description,
                 "focusOptions": {
-                    "zoom": 0.8,
+                    "zoom": zoom,
                     "highlight": True,
                     "duration": 1200,
                     "scrollIntoView": True

@@ -103,32 +103,118 @@ def parse_tool(query):
 # NAVIGATION - Focus on board items
 # ============================================================================
 
+def _get_item_description(item_id: str, component_type: str, item: dict) -> str:
+    """Generate a human-readable description for a board item based on its ID and metadata."""
+    item_id_lower = item_id.lower()
+
+    # Referral items
+    if 'referral-doctor-info' in item_id_lower or 'referral-info' in item_id_lower:
+        provider = item.get('provider', '')
+        return f"Referral letter{f' from {provider}' if provider else ''}"
+    if 'referral-letter' in item_id_lower:
+        return "Referral letter image / scanned referral document"
+
+    # Raw EHR data items — disambiguate by ID pattern
+    if item_id_lower.startswith('raw-lab-image-radiology') or 'imaging-report' in item_id_lower:
+        return "Radiology/imaging report (X-ray, ultrasound, CT, MRI)"
+    if item_id_lower.startswith('raw-lab-image'):
+        return "Lab report (original blood test / laboratory report document)"
+    if item_id_lower.startswith('raw-encounter-image') or item_id_lower.startswith('raw-encounter-report'):
+        return "Encounter report (original clinical notes document)"
+    if item_id_lower.startswith('raw-ice-lab-data'):
+        return "Raw lab data from encounter"
+
+    # Single encounter documents
+    if 'single-encounter' in item_id_lower:
+        enc = item.get('encounter', {})
+        meta = enc.get('meta', {})
+        visit_type = meta.get('visit_type', '')
+        date = meta.get('date_time', '')[:10] if meta.get('date_time') else ''
+        provider_name = meta.get('provider', {}).get('name', '') if isinstance(meta.get('provider'), dict) else ''
+        parts = [p for p in [visit_type, date, provider_name] if p]
+        return f"Encounter document ({', '.join(parts)})" if parts else "Encounter document"
+
+    # Named components
+    desc_map = {
+        'adverse-event-analytics': 'Adverse event analysis (RUCAM / CTCAE causality assessment)',
+        'differential-diagnosis': 'Differential diagnosis panel',
+        'encounter-track': 'Encounter timeline',
+        'lab-track': 'Lab results timeline',
+        'medication-track': 'Medication timeline',
+        'key-events-track': 'Key clinical events timeline',
+        'risk-track': 'Risk score timeline',
+        'dashboard-item-lab-table': 'Lab results table',
+        'dashboard-item-lab-chart': 'Lab results chart / graph',
+        'sidebar-1': 'Patient sidebar (demographics, problem list, medications)',
+        'iframe-item-easl': 'EASL clinical guidelines interface',
+        'chronomed': 'ChronoMed DILI assessment timeline',
+    }
+    for pattern, desc in desc_map.items():
+        if pattern in item_id_lower:
+            return desc
+
+    # Fallback for componentType-based identification
+    comp_map = {
+        'RawClinicalNote': 'Clinical note / referral document',
+        'Sidebar': 'Patient profile sidebar',
+        'DifferentialDiagnosis': 'Differential diagnosis',
+        'AdverseEventAnalytics': 'Adverse event analysis',
+    }
+    if component_type in comp_map:
+        return comp_map[component_type]
+
+    return ""
+
+
 async def resolve_object_id(query: str, context: str = ""):
     """Resolve user query to a board object ID and focus on it"""
     # Get board items using canvas_ops (has proper error handling and cache fallback)
     try:
         data = canvas_ops.get_board_items(quiet=True)  # Use quiet mode to reduce log noise
-        
+
         board_items = []
         for item in data:
             if not isinstance(item, dict):
                 continue  # Skip invalid items
-            
+
             item_type = item.get('item_type', item.get('type', ''))
+            item_id = item.get('object_id', item.get('id', ''))
+            component_type = item.get('componentType', '')
+
+            # Build a human-readable description to help the parser identify items
+            description = _get_item_description(item_id, component_type, item)
+
             if item_type == 'content':
                 item_content = item.get('content', {})
-                board_items.append({
-                    "object_id": item.get('object_id', item.get('id')),
+                entry = {
+                    "object_id": item_id,
                     "item_type": item_type,
                     "title": item_content.get('title', ''),
-                    "component": item_content.get('component', item.get('componentType', '')),
-                })
+                    "component": item_content.get('component', component_type),
+                }
             else:
-                board_items.append({
-                    "object_id": item.get('object_id', item.get('id')),
-                    "componentType": item.get('componentType', ''),
+                entry = {
+                    "object_id": item_id,
+                    "componentType": component_type,
                     "title": item.get('title', ''),
-                })
+                }
+
+            if description:
+                entry["description"] = description
+
+            # Include extra identifying fields when available
+            if item.get('visitType'):
+                entry["visitType"] = item['visitType']
+            if item.get('dataSource'):
+                entry["dataSource"] = item['dataSource']
+            if item.get('studyType'):
+                entry["studyType"] = item['studyType']
+            if item.get('date'):
+                entry["date"] = item['date']
+            if item.get('provider'):
+                entry["provider"] = item['provider']
+
+            board_items.append(entry)
     except Exception as e:
         print(f"❌ Error processing board items: {e}")
         board_items = []
@@ -142,7 +228,7 @@ async def resolve_object_id(query: str, context: str = ""):
     }
 
     model = _get_model("system_prompts/objectid_parser.md")
-    prompt = f"User query : '{query}'\n\nBoard items: {json.dumps(board_items[:20])}"  # Limit items for speed
+    prompt = f"User query : '{query}'\n\nBoard items: {json.dumps(board_items[:30])}"  # Limit items for speed
     
     response = model.generate_content(
         prompt,

@@ -285,14 +285,26 @@ async def get_agent_answer(todo):
 
 
 
-async def focus_item(item_id):
-    """Focus on a board item by ID with proper animation and highlighting"""
+async def focus_item(item_id, zoom=None):
+    """Focus on a board item by ID with proper animation and highlighting.
+    Items inside zones (raw reports, referral images) use a tighter zoom to
+    focus on the specific item rather than showing the entire zone.
+    """
     url = BASE_URL + "/api/focus"
+
+    # Auto-detect tighter zoom for items inside zones (raw EHR data, referral images)
+    if zoom is None:
+        item_lower = item_id.lower() if item_id else ""
+        if item_lower.startswith("raw-") or item_lower.startswith("referral-letter"):
+            zoom = 1.5  # Zoom in closer for individual items inside zones
+        else:
+            zoom = 0.8  # Default zoom for top-level components
+
     payload = {
         "patientId": patient_manager.get_patient_id(),
         "objectId": item_id,
         "focusOptions": {
-            "zoom": 0.8,
+            "zoom": zoom,
             "highlight": True,
             "duration": 1200,
             "scrollIntoView": True

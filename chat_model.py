@@ -49,7 +49,7 @@ TOPIC_FOCUS_MAP = {
     "consultation": "encounter-track-1",
     "appointment": "encounter-track-1",
     "history": "encounter-track-1",
-    
+
     # Labs
     "lab": "dashboard-item-lab-table",
     "alt": "dashboard-item-lab-table",
@@ -64,12 +64,12 @@ TOPIC_FOCUS_MAP = {
     "lft": "dashboard-item-lab-table",
     "liver function": "dashboard-item-lab-table",
     "blood test": "dashboard-item-lab-table",
-    
+
     # Lab chart
     "chart": "dashboard-item-lab-chart",
     "graph": "dashboard-item-lab-chart",
     "trend": "dashboard-item-lab-chart",
-    
+
     # Medications
     "medication": "medication-track-1",
     "drug": "medication-track-1",
@@ -79,22 +79,66 @@ TOPIC_FOCUS_MAP = {
     "furosemide": "medication-track-1",
     "propranolol": "medication-track-1",
     "sertraline": "medication-track-1",
-    
+
     # Diagnosis
     "diagnosis": "differential-diagnosis",
     "differential": "differential-diagnosis",
     "dili": "differential-diagnosis",
     "liver injury": "differential-diagnosis",
-    
+
     # Risk
     "risk": "risk-track-1",
-    "adverse": "adverse-event-analytics",
-    "event": "risk-track-1",
     "safety": "risk-track-1",
-    
+
+    # Adverse events
+    "adverse": "adverse-event-analytics",
+    "causality": "adverse-event-analytics",
+    "rucam": "adverse-event-analytics",
+
     # Key events
+    "event": "key-events-track-1",
     "timeline": "key-events-track-1",
     "key event": "key-events-track-1",
+
+    # Referral
+    "referral": "referral-doctor-info",
+    "referral letter": "referral-doctor-info",
+    "referred": "referral-doctor-info",
+    "referrer": "referral-doctor-info",
+    "gp letter": "referral-doctor-info",
+    "doctor letter": "referral-doctor-info",
+    "referring doctor": "referral-doctor-info",
+
+    # Reports / Raw EHR data
+    "report": "raw-encounter-image-1",
+    "reports": "raw-encounter-image-1",
+    "clinical notes": "raw-encounter-image-1",
+    "raw data": "raw-encounter-image-1",
+    "encounter report": "raw-encounter-image-1",
+    "radiology": "raw-lab-image-radiology-1",
+    "radiology report": "raw-lab-image-radiology-1",
+    "imaging": "raw-lab-image-radiology-1",
+    "imaging report": "raw-lab-image-radiology-1",
+    "x-ray": "raw-lab-image-radiology-1",
+    "xray": "raw-lab-image-radiology-1",
+    "ultrasound": "raw-lab-image-radiology-1",
+    "chest x-ray": "raw-lab-image-radiology-1",
+    "lab report": "raw-lab-image-1",
+    "blood test report": "raw-lab-image-1",
+    "pathology": "raw-lab-image-1",
+    "pathology report": "raw-lab-image-1",
+    "scan": "raw-lab-image-radiology-1",
+    "ct scan": "raw-lab-image-radiology-1",
+    "mri": "raw-lab-image-radiology-1",
+
+    # Patient profile
+    "patient": "sidebar-1",
+    "profile": "sidebar-1",
+
+    # EASL
+    "easl": "iframe-item-easl-interface",
+    "guideline": "iframe-item-easl-interface",
+    "guidelines": "iframe-item-easl-interface",
 }
 
 
@@ -102,25 +146,37 @@ def detect_focus_topic(query: str) -> str:
     """Detect which board item to focus based on query keywords"""
     query_lower = query.lower()
     
-    for keyword, object_id in TOPIC_FOCUS_MAP.items():
+    for keyword in sorted(TOPIC_FOCUS_MAP.keys(), key=len, reverse=True):
         if keyword in query_lower:
-            return object_id
+            return TOPIC_FOCUS_MAP[keyword]
     
     return None
 
 
-async def get_answer(query: str, conversation_text: str = '', context: str = ''):
+async def get_answer(query: str, conversation_text: str = '', context: str = '', relevant_item_id: str = ''):
     """Get answer from Gemini - uses cached model and pre-loaded context"""
     if not context:
         # Only fetch if not provided (should be provided by chat_agent)
         context_raw = canvas_ops.get_board_items(quiet=True)
         context = json.dumps(context_raw, indent=2)
-    
+
+    # If we know which board section is most relevant, extract it and prioritize it
+    relevant_hint = ""
+    if relevant_item_id:
+        try:
+            context_data = json.loads(context) if isinstance(context, str) else context
+            for item in context_data:
+                if isinstance(item, dict) and item.get('id', '') == relevant_item_id:
+                    relevant_hint = f"\n\nMOST RELEVANT SECTION for this query (board item '{relevant_item_id}'):\n{json.dumps(item, indent=2)[:8000]}\n\nUse the above section as the PRIMARY source for your answer.\n"
+                    break
+        except Exception:
+            pass
+
     # Keep prompt concise for faster response
     prompt = f"""Answer the user query using the patient data from the board context.
 Be helpful and informative. Use 1-3 sentences.
 
-Query: {query}
+Query: {query}{relevant_hint}
 
 Context (Board Data):
 {context[:30000]}"""  # Increased context size to include sidebar data
@@ -177,6 +233,17 @@ async def chat_agent(chat_history: list[dict]) -> str:
                     "risk-track-1": "risk events timeline",
                     "key-events-track-1": "key events timeline",
                     "sidebar-1": "patient sidebar",
+                    "referral-doctor-info": "referral letter",
+                    "referral-letter-image": "referral letter",
+                    "raw-encounter-image-1": "encounter reports",
+                    "raw-encounter-image-2": "encounter reports",
+                    "raw-encounter-image-3": "encounter reports",
+                    "raw-lab-image-radiology-1": "radiology report",
+                    "raw-lab-image-radiology-2": "radiology report",
+                    "raw-lab-image-1": "lab report",
+                    "raw-lab-image-2": "lab report",
+                    "raw-lab-image-3": "lab report",
+                    "iframe-item-easl-interface": "EASL guidelines",
                 }
                 # Safely get friendly name
                 object_id_str = str(object_id) if not isinstance(object_id, str) else object_id
@@ -227,20 +294,22 @@ async def chat_agent(chat_history: list[dict]) -> str:
         conversation_text = ""
         if len(chat_history) > 1:
             conversation_text = "\n".join([
-                f"{msg.get('role')}: {msg.get('content')}" 
+                f"{msg.get('role')}: {msg.get('content')}"
                 for msg in chat_history[:-1]
             ])
-        
-        # Get the answer first
-        answer = await get_answer(query, conversation_text, context)
-        
-        # Auto-focus on relevant section based on query topic
+
+        # Detect relevant section to prioritize in the answer and auto-focus
         focus_object_id = detect_focus_topic(query)
+
+        # Get the answer with relevant section hint
+        answer = await get_answer(query, conversation_text, context, relevant_item_id=focus_object_id or '')
+
+        # Auto-focus on relevant section
         if focus_object_id:
             try:
                 await canvas_ops.focus_item(focus_object_id)
                 logger.info(f"🎯 Auto-focused on: {focus_object_id}")
             except Exception as e:
                 logger.warning(f"⚠️ Auto-focus failed: {e}")
-        
+
         return answer

@@ -1204,6 +1204,7 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                         
                         # Map common queries to actual board item IDs (not component types)
                         focus_map = {
+                            # Labs
                             "lab": "lab-track-1",
                             "labs": "lab-track-1",
                             "lab result": "lab-track-1",
@@ -1211,37 +1212,75 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                             "lab timeline": "lab-track-1",
                             "lab chart": "dashboard-item-lab-chart",
                             "lab table": "dashboard-item-lab-table",
+                            # Medications
                             "medication": "medication-track-1",
                             "medications": "medication-track-1",
                             "meds": "medication-track-1",
                             "medication timeline": "medication-track-1",
+                            # Encounters
                             "encounter": "encounter-track-1",
                             "encounters": "encounter-track-1",
                             "visit": "encounter-track-1",
                             "visits": "encounter-track-1",
+                            # Risk & Events
                             "risk": "risk-track-1",
                             "risks": "risk-track-1",
                             "event": "key-events-track-1",
                             "events": "key-events-track-1",
                             "key events": "key-events-track-1",
+                            # Patient
                             "patient": "sidebar-1",
                             "profile": "sidebar-1",
                             "patient profile": "sidebar-1",
                             "sidebar": "sidebar-1",
+                            # Adverse events & Diagnosis
                             "adverse": "adverse-event-analytics",
+                            "causality": "adverse-event-analytics",
+                            "rucam": "adverse-event-analytics",
                             "diagnosis": "differential-diagnosis",
+                            "differential": "differential-diagnosis",
+                            # EASL
                             "easl": "easl-panel",
                             "easl panel": "easl-panel",
                             "guideline": "easl-panel",
                             "guidelines": "easl-panel",
+                            # Referral
+                            "referral": "referral-doctor-info",
+                            "referral letter": "referral-doctor-info",
+                            "referred": "referral-doctor-info",
+                            "referrer": "referral-doctor-info",
+                            "gp letter": "referral-doctor-info",
+                            "doctor letter": "referral-doctor-info",
+                            "referring doctor": "referral-doctor-info",
+                            # Reports / Raw EHR data
+                            "report": "raw-encounter-image-1",
+                            "reports": "raw-encounter-image-1",
+                            "clinical notes": "raw-encounter-image-1",
+                            "raw data": "raw-encounter-image-1",
+                            "encounter report": "raw-encounter-image-1",
+                            "radiology": "raw-lab-image-radiology-1",
+                            "radiology report": "raw-lab-image-radiology-1",
+                            "imaging": "raw-lab-image-radiology-1",
+                            "imaging report": "raw-lab-image-radiology-1",
+                            "x-ray": "raw-lab-image-radiology-1",
+                            "xray": "raw-lab-image-radiology-1",
+                            "ultrasound": "raw-lab-image-radiology-1",
+                            "chest x-ray": "raw-lab-image-radiology-1",
+                            "lab report": "raw-lab-image-1",
+                            "blood test report": "raw-lab-image-1",
+                            "pathology": "raw-lab-image-1",
+                            "pathology report": "raw-lab-image-1",
+                            "scan": "raw-lab-image-radiology-1",
+                            "ct scan": "raw-lab-image-radiology-1",
+                            "mri": "raw-lab-image-radiology-1",
                         }
                         
-                        # Try direct mapping first
+                        # Try direct mapping first (check longer/more specific keys first)
                         object_id = None
                         already_focused = False
-                        for key, item_id in focus_map.items():
+                        for key in sorted(focus_map.keys(), key=len, reverse=True):
                             if key in query:
-                                object_id = item_id
+                                object_id = focus_map[key]
                                 logger.info(f"✅ Mapped '{query}' to {object_id}")
                                 break
 
