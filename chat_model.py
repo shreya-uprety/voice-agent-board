@@ -131,9 +131,18 @@ TOPIC_FOCUS_MAP = {
     "ct scan": "raw-lab-image-radiology-1",
     "mri": "raw-lab-image-radiology-1",
 
-    # Patient profile
+    # Patient profile / overview
+    "medical situation": "sidebar-1",
+    "overview": "sidebar-1",
     "patient": "sidebar-1",
     "profile": "sidebar-1",
+
+    # Clinical timeline
+    "clinical timeline": "key-events-track-1",
+
+    # Physical exam / encounters
+    "physical exam": "encounter-track-1",
+    "exam finding": "encounter-track-1",
 
     # EASL
     "easl": "iframe-item-easl-interface",

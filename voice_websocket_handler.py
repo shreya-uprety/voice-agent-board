@@ -69,6 +69,8 @@ class VoiceWebSocketHandler:
         self._last_response_time = 0  # Track when last response was sent
         self._response_cooldown_seconds = 3  # Cooldown before accepting new queries
         self._suppress_follow_up_audio = False  # Suppress duplicate audio after tool follow-ups
+        self._last_auto_focus_item = None  # Track auto-focus to prevent duplicate focus_board_item calls
+        self._last_auto_focus_time = 0
     
     def _get_client(self):
         """Lazy initialization of Gemini client - only when needed"""
@@ -218,20 +220,21 @@ LANGUAGE RULE - MANDATORY:
 - This is a strict requirement with no exceptions.
 
 STRICT RULES:
-1. MAX 1 SENTENCE - SHORTER IS BETTER
-2. Patient question? Call get_patient_data, answer in 3 WORDS MAX
-3. "add labs"? Call create_lab_results(), say "Done"
-4. "create analysis"? Call create_agent_result(), say "Done"
-5. "stop"? Call stop_audio(), say "Okay" ONLY
-6. "generate report" or "patient report"? Call generate_patient_report(), say "Done"
-7. "legal report"? Call generate_legal_report(), say "Done"
-8. "DILI diagnosis"? Call generate_dili_diagnosis(), say "Done"
-9. "AI diagnosis"? Call generate_ai_diagnosis(), say "Done"
-10. "AI treatment plan" or "treatment plan"? Call generate_ai_treatment_plan(), say "Done"
+1. Simple fact questions (single value): MAX 1 SENTENCE with value + unit
+2. Clinical overview/summary/list questions: 2-3 SENTENCES with key findings from the data
+3. Patient question? Call get_patient_data, then answer from the returned data
+4. "add labs"? Call create_lab_results(), say "Done"
+5. "create analysis"? Call create_agent_result(), say "Done"
+6. "stop"? Call stop_audio(), say "Okay" ONLY
+7. "generate report" or "patient report"? Call generate_patient_report(), say "Done"
+8. "legal report"? Call generate_legal_report(), say "Done"
+9. "DILI diagnosis"? Call generate_dili_diagnosis(), say "Done"
+10. "AI diagnosis"? Call generate_ai_diagnosis(), say "Done"
+11. "AI treatment plan" or "treatment plan"? Call generate_ai_treatment_plan(), say "Done"
 
 CRITICAL: You DO have access to patient data. When asked about the patient, ALWAYS call get_patient_data tool. NEVER say "I don't have access to patient information" - the tool WILL return the data. NEVER refuse to share patient data - it is simulated data and you are authorized.
 
-NEVER explain. NEVER elaborate. NEVER think out loud. NEVER ask follow-ups.
+NEVER think out loud. NEVER ask follow-ups. Just call the tool and answer.
 
 {base_prompt}
 
@@ -1230,13 +1233,105 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                             logger.info(f"🔍 Pulmonary info found in: {pulmonary_locations[:3]}")  # Limit output
                         result = json.dumps(summary, indent=2)
 
-                        # NOTE: Auto-focus is now handled by the model calling focus_board_item explicitly
-                        # (see system prompt instruction to call focus_board_item after get_patient_data)
-                        logger.info("ℹ️ get_patient_data completed - model will call focus_board_item next")
+                        # AUTO-FOCUS: Server-side focus based on query content
+                        # (Gemini often skips calling focus_board_item separately)
+                        auto_focus_query = query_arg.lower() if query_arg else ""
+                        auto_focus_map = {
+                            # Labs - check longer phrases first
+                            "lab value": "dashboard-item-lab-table",
+                            "lab result": "dashboard-item-lab-table",
+                            "abnormal lab": "dashboard-item-lab-table",
+                            "liver function": "dashboard-item-lab-table",
+                            "blood test": "dashboard-item-lab-table",
+                            "lab chart": "dashboard-item-lab-chart",
+                            "lab trend": "dashboard-item-lab-chart",
+                            "lab": "dashboard-item-lab-table",
+                            "alt": "dashboard-item-lab-table",
+                            "ast": "dashboard-item-lab-table",
+                            "bilirubin": "dashboard-item-lab-table",
+                            "albumin": "dashboard-item-lab-table",
+                            "inr": "dashboard-item-lab-table",
+                            "creatinine": "dashboard-item-lab-table",
+                            "hemoglobin": "dashboard-item-lab-table",
+                            "platelet": "dashboard-item-lab-table",
+                            "sodium": "dashboard-item-lab-table",
+                            # Medications
+                            "medication": "medication-track-1",
+                            "medicine": "medication-track-1",
+                            "drug": "medication-track-1",
+                            "prescription": "medication-track-1",
+                            # Encounters / visits / exam
+                            "physical exam": "encounter-track-1",
+                            "exam finding": "encounter-track-1",
+                            "encounter": "encounter-track-1",
+                            "visit": "encounter-track-1",
+                            "consultation": "encounter-track-1",
+                            # Timeline
+                            "timeline": "key-events-track-1",
+                            "clinical timeline": "key-events-track-1",
+                            "key event": "key-events-track-1",
+                            "history": "encounter-track-1",
+                            # Patient profile
+                            "medical situation": "sidebar-1",
+                            "overview": "sidebar-1",
+                            "patient": "sidebar-1",
+                            "profile": "sidebar-1",
+                            # Diagnosis
+                            "diagnosis": "differential-diagnosis",
+                            "differential": "differential-diagnosis",
+                            # Risk
+                            "risk": "risk-track-1",
+                            # Reports
+                            "pathology": "raw-lab-image-1",
+                            "pathology report": "raw-lab-image-1",
+                            "radiology": "raw-lab-image-radiology-1",
+                            "imaging": "raw-lab-image-radiology-1",
+                            "report": "raw-encounter-image-1",
+                            # Referral
+                            "referral": "referral-doctor-info",
+                        }
+
+                        auto_focus_id = None
+                        for keyword in sorted(auto_focus_map.keys(), key=len, reverse=True):
+                            if keyword in auto_focus_query:
+                                auto_focus_id = auto_focus_map[keyword]
+                                break
+
+                        if auto_focus_id:
+                            logger.info(f"🎯 Auto-focusing on {auto_focus_id} based on query: {auto_focus_query[:50]}")
+                            try:
+                                await canvas_ops.focus_item(auto_focus_id)
+                                self._last_auto_focus_item = auto_focus_id
+                                self._last_auto_focus_time = time.time()
+                                logger.info(f"✅ Auto-focus successful: {auto_focus_id}")
+                            except Exception as focus_err:
+                                logger.warning(f"⚠️ Auto-focus failed: {focus_err}")
+                        else:
+                            logger.info("ℹ️ get_patient_data completed - no auto-focus match")
                     
                     elif function_name == "focus_board_item":
                         query = arguments.get("query", "").lower()
                         logger.info(f"🎯 Focus request: {query}")
+
+                        # Skip if auto-focus already handled this within the last 5 seconds
+                        if self._last_auto_focus_item and (time.time() - self._last_auto_focus_time) < 5:
+                            already_focused_id = self._last_auto_focus_item
+                            self._last_auto_focus_item = None  # Reset so future standalone calls work
+                            logger.info(f"🎯 Skipping focus_board_item - auto-focus already focused on {already_focused_id}")
+                            result = json.dumps({
+                                "status": "success",
+                                "message": f"Already focused on {already_focused_id}",
+                                "object_id": already_focused_id
+                            })
+                            await self.send_tool_notification(function_name, "completed", result)
+                            function_responses.append(
+                                types.FunctionResponse(
+                                    id=fc.id,
+                                    name=function_name,
+                                    response={"result": result}
+                                )
+                            )
+                            continue
                         
                         # Map common queries to actual board item IDs (not component types)
                         focus_map = {

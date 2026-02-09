@@ -64,49 +64,91 @@ MODEL = "gemini-2.0-flash"  # Faster model
 
 def parse_tool(query):
     """Parse user query and route to appropriate tool - with fast keyword matching first"""
-    q_lower = query.lower()
-    
-    # Fast keyword matching for common patterns (avoids Gemini API call)
-    if any(kw in q_lower for kw in ['easl', 'guideline', 'clinical guideline', 'recommendation']):
+    q_lower = query.lower().strip()
+
+    import re
+
+    # STEP 1: Detect QUESTIONS - these should almost always be general Q&A, not tool calls
+    # Questions start with interrogative words or are phrased as requests for information
+    is_question = bool(re.match(
+        r'^(what|which|who|when|where|why|how|describe|explain|list|tell me|give me|walk me|summarize|'
+        r'can you tell|could you|is there|are there|does|do |did |has |have |was |were )',
+        q_lower
+    )) or q_lower.endswith('?')
+
+    # STEP 2: If it's a question, only match explicit tool triggers (not ambiguous keywords)
+    # This prevents "List medications and compliance issues" from triggering legal report
+
+    # EASL - questions about guidelines ARE tool calls (send to EASL)
+    if any(kw in q_lower for kw in ['easl', 'clinical guideline']):
         return {"query": query, "tool": "get_easl_answer"}
+    # Only trigger guideline/recommendation if it's clearly asking EASL (not just mentioning them)
+    if not is_question and any(kw in q_lower for kw in ['guideline', 'recommendation']):
+        return {"query": query, "tool": "get_easl_answer"}
+
+    # Navigation - explicit navigation commands
     if any(kw in q_lower for kw in ['navigate', 'go to', 'show me', 'focus on', 'zoom to']):
         return {"query": query, "tool": "navigate_canvas"}
+
+    # Task creation - explicit create/add commands
     if any(kw in q_lower for kw in ['create task', 'add task', 'todo', 'to-do', 'reminder']):
         return {"query": query, "tool": "generate_task"}
+
     # send_message_to_patient MUST be checked before schedule/notification
     # because message content may contain words like "follow up", "alert", etc.
     if any(kw in q_lower for kw in ['message patient', 'message the patient', 'message to the patient', 'send a message', 'send message to patient', 'tell the patient', 'text the patient', 'chat with patient', 'ask the patient', 'ask patient']):
         return {"query": query, "tool": "send_message_to_patient"}
     # Detect "ask/tell {name} about/to/..." patterns (e.g. "ask arthur about his chest pain")
     # Excludes "tell me" and "ask me" which are questions, not messages
-    import re
     if re.match(r'(ask|tell)\s+(?!me\b|us\b)\w+\s+(about|to|if|how|when|whether|that)\b', q_lower):
         return {"query": query, "tool": "send_message_to_patient"}
+
+    # Doctor notes - explicit create/add commands
     if any(kw in q_lower for kw in ['doctor note', 'add note', 'add a note', 'create note', 'create a note', 'write note', 'write a note', 'clinical note', 'nurse note']):
         return {"query": query, "tool": "create_doctor_note"}
-    if any(kw in q_lower for kw in ['schedule', 'appointment', 'follow-up', 'follow up']):
+
+    # If it's a question, skip action-oriented tools and go to general Q&A
+    # This prevents "What follow-up should Arthur have?" from creating a schedule
+    # or "List medications and compliance issues" from generating a legal report
+    if is_question:
+        return {"query": query, "tool": "general"}
+
+    # STEP 3: Action-oriented commands (only reached if NOT a question)
+
+    # Schedule - requires explicit scheduling intent
+    if any(kw in q_lower for kw in ['schedule', 'book appointment', 'create appointment']):
         return {"query": query, "tool": "create_schedule"}
-    if any(kw in q_lower for kw in ['notify', 'notification', 'alert']):
+    # "follow-up" / "follow up" only triggers schedule when it's a command, not a question
+    if any(kw in q_lower for kw in ['follow-up', 'follow up']) and any(kw in q_lower for kw in ['schedule', 'book', 'create', 'arrange', 'set up']):
+        return {"query": query, "tool": "create_schedule"}
+
+    # Notifications - requires explicit send/notify intent
+    if any(kw in q_lower for kw in ['send notification', 'send alert', 'notify the', 'notify care']):
         return {"query": query, "tool": "send_notification"}
+
     # ONLY create labs when user explicitly says "add" or "create" or "post"
     if any(kw in q_lower for kw in ['add lab', 'create lab', 'post lab', 'put lab']):
         return {"query": query, "tool": "create_lab_results"}
-    # Questions about lab values should be handled as general queries (answered, not created)
-    if any(kw in q_lower for kw in ['lab result', 'lab value', 'blood test', 'liver function', 'lft', 'what are the lab', 'show lab', 'tell me the lab']):
-        return {"query": query, "tool": "general"}
+
+    # AI tools - require explicit "generate" or "create" or "ai" prefix
     if any(kw in q_lower for kw in ['ai diagnosis', 'ai diagnostic', 'generate ai diagnosis', 'clinical diagnosis', 'medforce diagnosis']):
         return {"query": query, "tool": "generate_ai_diagnosis"}
     if any(kw in q_lower for kw in ['ai treatment', 'ai plan', 'generate treatment', 'medforce treatment', 'ai treatment plan']):
         return {"query": query, "tool": "generate_ai_treatment_plan"}
-    if any(kw in q_lower for kw in ['diagnosis', 'dili diagnosis', 'liver injury diagnosis']):
+
+    # DILI diagnosis - only explicit generation commands
+    if any(kw in q_lower for kw in ['generate diagnosis', 'create diagnosis', 'dili diagnosis', 'liver injury diagnosis']):
         return {"query": query, "tool": "generate_diagnosis"}
-    if any(kw in q_lower for kw in ['patient report', 'summary report', 'generate report']):
+
+    # Reports - only explicit generation commands
+    if any(kw in q_lower for kw in ['generate patient report', 'create patient report', 'patient report', 'summary report', 'generate report']):
         return {"query": query, "tool": "generate_patient_report"}
-    if any(kw in q_lower for kw in ['legal', 'legal report', 'compliance']):
+
+    # Legal - only explicit legal report generation (NOT just mentioning "compliance" or "legal")
+    if any(kw in q_lower for kw in ['generate legal', 'create legal', 'legal report', 'compliance report']):
         return {"query": query, "tool": "generate_legal_report"}
-    
+
     # Default to general Q&A for most queries (no tool needed)
-    # This avoids the slow Gemini API call for simple questions
     return {"query": query, "tool": "general"}
 
 
