@@ -77,6 +77,8 @@ def parse_tool(query):
     # because message content may contain words like "follow up", "alert", etc.
     if any(kw in q_lower for kw in ['message patient', 'message the patient', 'message to the patient', 'send a message', 'send message to patient', 'tell the patient', 'text the patient', 'chat with patient']):
         return {"query": query, "tool": "send_message_to_patient"}
+    if any(kw in q_lower for kw in ['doctor note', 'add note', 'add a note', 'create note', 'create a note', 'write note', 'write a note', 'clinical note', 'nurse note']):
+        return {"query": query, "tool": "create_doctor_note"}
     if any(kw in q_lower for kw in ['schedule', 'appointment', 'follow-up', 'follow up']):
         return {"query": query, "tool": "create_schedule"}
     if any(kw in q_lower for kw in ['notify', 'notification', 'alert']):

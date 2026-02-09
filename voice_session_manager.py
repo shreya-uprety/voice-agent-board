@@ -234,6 +234,24 @@ Examples: "notify the team about critical labs", "send alert about patient statu
             }
         },
         {
+            "name": "create_doctor_note",
+            "description": """Create a doctor or nurse note on the board.
+
+Call this tool when user says: "add a note", "create a note", "write a note", "doctor note", "nurse note", "clinical note"
+
+Examples: "add a note that patient shows improvement", "write a note about the medication change", "create a clinical note for this visit".""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The content of the doctor/nurse note"
+                    }
+                },
+                "required": ["content"]
+            }
+        },
+        {
             "name": "send_message_to_patient",
             "description": """Send a message to the patient via the patient chat system.
 

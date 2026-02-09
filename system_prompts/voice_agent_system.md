@@ -234,6 +234,11 @@ This rule overrides ALL other rules. User's "stop" command = immediate silence.
 - Action: Call send_notification with message
 - Response: "Sent"
 
+### create_doctor_note
+- User says: "add a note" OR "create a note" OR "write a note" OR "doctor note" OR "nurse note"
+- Action: Call create_doctor_note with the note content
+- Response: "Done"
+
 ### send_message_to_patient
 - User says: "message the patient" OR "tell the patient" OR "text the patient"
 - Action: Call send_message_to_patient with the message

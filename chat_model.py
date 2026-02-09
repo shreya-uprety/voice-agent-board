@@ -262,6 +262,46 @@ async def chat_agent(chat_history: list[dict]) -> str:
         result = await side_agent.create_schedule(query, context)
         return f"✅ Schedule created: {result.get('message', result.get('status', 'Success'))}"
     
+    elif tool == "create_doctor_note":
+        # Extract note content (strip command prefixes)
+        import re
+        content = query
+        # Try to extract quoted text first
+        quoted = re.search(r'["\u201c](.+?)["\u201d]', content)
+        if quoted:
+            content = quoted.group(1)
+        else:
+            for prefix in [
+                'create a doctor note with the content ',
+                'create a doctor note saying ',
+                'create a doctor note that ',
+                'create a doctor note ',
+                'create a nurse note with the content ',
+                'create a nurse note saying ',
+                'create a nurse note ',
+                'create a clinical note ',
+                'add a note saying ',
+                'add a note that ',
+                'add a note ',
+                'add note ',
+                'create a note saying ',
+                'create a note that ',
+                'create a note ',
+                'create note ',
+                'write a note saying ',
+                'write a note that ',
+                'write a note ',
+                'write note ',
+                'doctor note ',
+                'nurse note ',
+                'clinical note ',
+            ]:
+                if content.lower().startswith(prefix):
+                    content = content[len(prefix):]
+                    break
+        result = await canvas_ops.create_doctor_note(content)
+        return f"✅ Note created: {result.get('message', 'Success')}"
+
     elif tool == "send_message_to_patient":
         # Extract the actual message from the query (strip command prefixes)
         import re

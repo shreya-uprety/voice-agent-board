@@ -335,6 +335,7 @@ class ToolExecutor:
             "create_schedule": self.create_schedule,
             "send_notification": self.send_notification,
             "send_message_to_patient": self.send_message_to_patient,
+            "create_doctor_note": self.create_doctor_note,
             "create_diagnosis_report": self.create_diagnosis_report,
             "create_patient_report": self.create_patient_report,
             "create_legal_report": self.create_legal_report,
@@ -562,6 +563,24 @@ class ToolExecutor:
                                 }
                             },
                             "required": ["patient_id", "message"]
+                        }
+                    ),
+                    types.FunctionDeclaration(
+                        name="create_doctor_note",
+                        description="Create a doctor or nurse note on the board.",
+                        parameters={
+                            "type": "object",
+                            "properties": {
+                                "patient_id": {
+                                    "type": "string",
+                                    "description": "The patient ID"
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "description": "The content of the doctor/nurse note"
+                                }
+                            },
+                            "required": ["patient_id", "content"]
                         }
                     ),
                     types.FunctionDeclaration(
@@ -873,6 +892,10 @@ class ToolExecutor:
     def send_message_to_patient(self, patient_id: str, message: str) -> Dict[str, Any]:
         """Send a message to the patient."""
         return asyncio.run(self.canvas_tools.send_message_to_patient(patient_id, message))
+
+    def create_doctor_note(self, patient_id: str, content: str) -> Dict[str, Any]:
+        """Create a doctor/nurse note on the board."""
+        return asyncio.run(self.canvas_tools.create_doctor_note(patient_id, content))
     
     def create_diagnosis_report(self, patient_id: str, summary: str) -> Dict[str, Any]:
         """Create diagnosis report on board."""

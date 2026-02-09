@@ -750,6 +750,60 @@ async def create_notification(payload):
             "message": str(e)
         }
 
+async def create_doctor_note(content):
+    """Create a doctor/nurse note on the board via POST /api/doctor-notes"""
+    patient_id = patient_manager.get_patient_id()
+    url = BASE_URL + "/api/doctor-notes"
+
+    api_payload = {
+        "patientId": patient_id,
+        "content": content
+    }
+
+    with open(f"{config.output_dir}/doctor_note_payload.json", "w", encoding="utf-8") as f:
+        json.dump(api_payload, f, ensure_ascii=False, indent=4)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=api_payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                print(f"Doctor note API status: {response.status}")
+
+                if response.status in [200, 201]:
+                    data = await response.json()
+                    with open(f"{config.output_dir}/doctor_note_response.json", "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=4)
+                    # API returns {success, item: {id, ...}}
+                    note_id = data.get("item", {}).get("id") or data.get("id")
+                    print(f"📝 Doctor note created with id: {note_id}")
+                    # Focus on the created note
+                    if note_id:
+                        try:
+                            await asyncio.sleep(0.3)
+                            await focus_item(note_id)
+                        except Exception as focus_err:
+                            print(f"⚠️ Failed to focus on note {note_id}: {focus_err}")
+                    return {
+                        "status": "success",
+                        "message": "Doctor note created",
+                        "api_response": data,
+                        "id": note_id
+                    }
+                else:
+                    error_text = await response.text()
+                    print(f"⚠️ Doctor note API returned {response.status}: {error_text[:200]}")
+                    with open(f"{config.output_dir}/doctor_note_response.json", "w", encoding="utf-8") as f:
+                        json.dump({"status": "error", "code": response.status, "error": error_text}, f, ensure_ascii=False, indent=4)
+                    return {
+                        "status": "error",
+                        "message": f"Note creation failed (API returned {response.status})"
+                    }
+    except Exception as e:
+        print(f"❌ Error creating doctor note: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 async def send_patient_message(message):
     """Send a message to a patient via the chat API"""
     patient_id = patient_manager.get_patient_id()

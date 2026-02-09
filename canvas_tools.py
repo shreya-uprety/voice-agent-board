@@ -313,6 +313,63 @@ class CanvasTools:
                 "message": f"Failed to send notification: {str(e)}"
             }
     
+    async def create_doctor_note(self, patient_id: str, content: str) -> Dict[str, Any]:
+        """
+        Create a doctor/nurse note on the board.
+
+        Args:
+            patient_id: Patient ID
+            content: Note content
+
+        Returns:
+            Dict with status and note result
+        """
+        try:
+            logger.info(f"Creating doctor note for patient {patient_id}: {content[:50]}...")
+
+            note_payload = {
+                "patientId": patient_id,
+                "content": content
+            }
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.api_url}/doctor-notes",
+                    json=note_payload,
+                    timeout=10.0
+                )
+
+                if response.status_code in [200, 201]:
+                    result = response.json()
+                    # API returns {success, item: {id, ...}}
+                    note_id = result.get("item", {}).get("id") or result.get("id")
+                    logger.info(f"Doctor note created successfully: {note_id}")
+                    # Auto-focus on the created note
+                    if note_id:
+                        try:
+                            await self.focus_board_item(patient_id, note_id)
+                        except Exception:
+                            pass
+                    return {
+                        "status": "success",
+                        "message": "Doctor note created on board",
+                        "data": result,
+                        "id": note_id
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"Failed to create note: HTTP {response.status_code}",
+                        "details": response.text
+                    }
+
+        except Exception as e:
+            logger.error(f"Error creating doctor note: {e}")
+            return {
+                "status": "error",
+                "message": f"Failed to create note: {str(e)}"
+            }
+
     async def send_message_to_patient(self, patient_id: str, message: str) -> Dict[str, Any]:
         """
         Send a message to a patient via the chat API.
