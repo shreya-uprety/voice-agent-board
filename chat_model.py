@@ -303,30 +303,60 @@ async def chat_agent(chat_history: list[dict]) -> str:
         return f"✅ Note created: {result.get('message', 'Success')}"
 
     elif tool == "send_message_to_patient":
-        # Extract the actual message from the query (strip command prefixes)
+        # Convert doctor's intent into a proper patient-facing message using AI
         import re
         message = query
-        # Try to extract quoted text first
+        # If the message is explicitly quoted, use it as-is
         quoted = re.search(r'["\u201c](.+?)["\u201d]', message)
         if quoted:
             message = quoted.group(1)
         else:
-            # Strip known command prefixes
-            for prefix in [
-                'send a message to the patient saying ',
-                'send a message to the patient ',
-                'send message to the patient saying ',
-                'send message to the patient ',
-                'message the patient saying ',
-                'message the patient ',
-                'tell the patient to ',
-                'tell the patient ',
-                'text the patient ',
-                'chat with patient ',
-            ]:
-                if message.lower().startswith(prefix):
-                    message = message[len(prefix):]
-                    break
+            # Use AI to convert doctor's command into a patient-friendly message
+            try:
+                _ensure_genai_configured()
+                rewrite_model = genai.GenerativeModel("gemini-2.0-flash")
+                rewrite_prompt = f"""Convert this doctor's instruction into a direct, professional message to the patient.
+The doctor said: "{query}"
+
+Rules:
+- Write ONLY the message text that the patient will see
+- Address the patient directly (use "you/your")
+- Be professional, warm, and clear
+- Do NOT include any prefixes like "Dear patient" or sign-offs
+- Do NOT include quotes around the message
+- Keep it concise (1-2 sentences)
+
+Example inputs and outputs:
+- "ask the patient about his chest pain" → "How has your chest pain been? Could you describe any recent changes or episodes?"
+- "tell the patient to take their medication" → "Please remember to take your medication as prescribed."
+- "send a message to the patient asking him about his follow up" → "When would you be available for your follow-up appointment?"
+- "message the patient about the test results" → "Your test results are ready. We'll discuss them at your next appointment."
+
+Output ONLY the message:"""
+                rewrite_response = rewrite_model.generate_content(rewrite_prompt)
+                message = rewrite_response.text.strip().strip('"').strip("'")
+                logger.info(f"💬 Rewrote message: {query[:50]}... → {message[:50]}...")
+            except Exception as e:
+                logger.error(f"Message rewrite failed, falling back to prefix strip: {e}")
+                # Fallback: strip common prefixes
+                for prefix in [
+                    'send a message to the patient saying ',
+                    'send a message to the patient ',
+                    'send message to the patient saying ',
+                    'send message to the patient ',
+                    'message the patient saying ',
+                    'message the patient ',
+                    'tell the patient to ',
+                    'tell the patient ',
+                    'text the patient ',
+                    'ask the patient about ',
+                    'ask the patient ',
+                    'ask patient ',
+                    'chat with patient ',
+                ]:
+                    if message.lower().startswith(prefix):
+                        message = message[len(prefix):]
+                        break
         result = await canvas_ops.send_patient_message(message)
         # Focus on patient chat after sending
         try:

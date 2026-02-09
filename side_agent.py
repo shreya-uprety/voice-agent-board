@@ -75,7 +75,12 @@ def parse_tool(query):
         return {"query": query, "tool": "generate_task"}
     # send_message_to_patient MUST be checked before schedule/notification
     # because message content may contain words like "follow up", "alert", etc.
-    if any(kw in q_lower for kw in ['message patient', 'message the patient', 'message to the patient', 'send a message', 'send message to patient', 'tell the patient', 'text the patient', 'chat with patient']):
+    if any(kw in q_lower for kw in ['message patient', 'message the patient', 'message to the patient', 'send a message', 'send message to patient', 'tell the patient', 'text the patient', 'chat with patient', 'ask the patient', 'ask patient']):
+        return {"query": query, "tool": "send_message_to_patient"}
+    # Detect "ask/tell {name} about/to/..." patterns (e.g. "ask arthur about his chest pain")
+    # Excludes "tell me" and "ask me" which are questions, not messages
+    import re
+    if re.match(r'(ask|tell)\s+(?!me\b|us\b)\w+\s+(about|to|if|how|when|whether|that)\b', q_lower):
         return {"query": query, "tool": "send_message_to_patient"}
     if any(kw in q_lower for kw in ['doctor note', 'add note', 'add a note', 'create note', 'create a note', 'write note', 'write a note', 'clinical note', 'nurse note']):
         return {"query": query, "tool": "create_doctor_note"}

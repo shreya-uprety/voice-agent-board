@@ -255,9 +255,9 @@ Examples: "add a note that patient shows improvement", "write a note about the m
             "name": "send_message_to_patient",
             "description": """Send a message to the patient via the patient chat system.
 
-Call this tool when user says: "message the patient", "tell the patient", "text the patient", "chat with patient", "send message to patient"
+Call this tool when user says: "message the patient", "tell the patient", "text the patient", "chat with patient", "send message to patient", "ask the patient", "ask patient"
 
-Examples: "tell the patient to take their medication", "message the patient about the follow-up", "text the patient the test results".""",
+Examples: "tell the patient to take their medication", "ask the patient about his chest pain", "message the patient about the follow-up", "text the patient the test results".""",
             "parameters": {
                 "type": "object",
                 "properties": {
