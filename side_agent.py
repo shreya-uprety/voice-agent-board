@@ -96,15 +96,21 @@ def parse_tool(query):
 
     # send_message_to_patient MUST be checked before schedule/notification
     # because message content may contain words like "follow up", "alert", etc.
-    if any(kw in q_lower for kw in ['message patient', 'message the patient', 'message to the patient', 'send a message', 'send message to patient', 'tell the patient', 'text the patient', 'chat with patient', 'ask the patient', 'ask patient']):
+    if any(kw in q_lower for kw in ['message patient', 'message the patient', 'message to the patient', 'send a message', 'send message to patient', 'tell the patient', 'text the patient', 'chat with patient', 'ask the patient', 'ask patient', 'draft a message', 'draft message', 'send it to']):
         return {"query": query, "tool": "send_message_to_patient"}
     # Detect "ask/tell {name} about/to/..." patterns (e.g. "ask arthur about his chest pain")
     # Excludes "tell me" and "ask me" which are questions, not messages
     if re.match(r'(ask|tell)\s+(?!me\b|us\b)\w+\s+(about|to|if|how|when|whether|that)\b', q_lower):
         return {"query": query, "tool": "send_message_to_patient"}
+    # Detect "draft/send/write ... message" patterns (e.g. "draft a compassionate message to Arthur")
+    if re.search(r'(draft|send|write).{0,50}message', q_lower):
+        return {"query": query, "tool": "send_message_to_patient"}
 
     # Doctor notes - explicit create/add commands
-    if any(kw in q_lower for kw in ['doctor note', 'add note', 'add a note', 'create note', 'create a note', 'write note', 'write a note', 'clinical note', 'nurse note']):
+    if any(kw in q_lower for kw in ['doctor note', 'add note', 'add a note', 'create note', 'create a note', 'write note', 'write a note', 'clinical note', 'nurse note', 'nursing note', 'admission note', 'admission assessment']):
+        return {"query": query, "tool": "create_doctor_note"}
+    # Detect "create/write/draft ... notes" patterns (e.g. "create comprehensive nursing notes")
+    if re.search(r'(create|write|draft|add).{0,30}note', q_lower):
         return {"query": query, "tool": "create_doctor_note"}
 
     # If it's a question, skip action-oriented tools and go to general Q&A

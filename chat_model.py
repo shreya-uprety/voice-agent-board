@@ -205,7 +205,7 @@ async def chat_agent(chat_history: list[dict]) -> str:
     Takes chat history and returns agent response.
     """
     start_time = time.time()
-    query = chat_history[-1].get('content')
+    query = chat_history[-1].get('content', '').strip().strip('"').strip('\u201c').strip('\u201d').strip("'")
     logger.info(f"⏱️ chat_agent: START - Query: {query[:50]}...")
     
     # Fast tool routing (keyword-based, no API call)
@@ -272,51 +272,74 @@ async def chat_agent(chat_history: list[dict]) -> str:
         return f"✅ Schedule created: {result.get('message', result.get('status', 'Success'))}"
     
     elif tool == "create_doctor_note":
-        # Extract note content (strip command prefixes)
+        # Always use AI to generate proper clinical note content from the doctor's request
         import re
-        content = query
-        # Try to extract quoted text first
-        quoted = re.search(r'["\u201c](.+?)["\u201d]', content)
+        content = query.strip().strip('"').strip('\u201c').strip('\u201d').strip("'")
+        # Check for embedded quoted text (e.g., 'create a note "patient is stable"')
+        # Only match quotes that are INSIDE a larger command, not wrapping the whole query
+        quoted = re.search(r'\w\s+["\u201c](.+?)["\u201d]', content)
         if quoted:
             content = quoted.group(1)
         else:
-            for prefix in [
-                'create a doctor note with the content ',
-                'create a doctor note saying ',
-                'create a doctor note that ',
-                'create a doctor note ',
-                'create a nurse note with the content ',
-                'create a nurse note saying ',
-                'create a nurse note ',
-                'create a clinical note ',
-                'add a note saying ',
-                'add a note that ',
-                'add a note ',
-                'add note ',
-                'create a note saying ',
-                'create a note that ',
-                'create a note ',
-                'create note ',
-                'write a note saying ',
-                'write a note that ',
-                'write a note ',
-                'write note ',
-                'doctor note ',
-                'nurse note ',
-                'clinical note ',
-            ]:
-                if content.lower().startswith(prefix):
-                    content = content[len(prefix):]
-                    break
+            # Use AI to generate proper note content from the command + patient context
+            try:
+                _ensure_genai_configured()
+                note_model = genai.GenerativeModel("gemini-2.0-flash")
+                note_prompt = f"""Generate professional clinical notes based on the doctor's request and patient data.
+
+Doctor's request: "{query}"
+
+Patient data (board context):
+{context[:20000]}
+
+Rules:
+- Write the note content ONLY (no metadata, no JSON, no markdown code blocks)
+- Use professional clinical documentation style
+- Include relevant findings, assessments, and plans from the patient data
+- Be comprehensive but concise
+- Use appropriate medical terminology
+- Format with clear sections if the request calls for detailed notes
+- If the request is simple (e.g., "patient refused medication"), write a brief note
+- If the request asks for comprehensive/detailed notes, write thorough clinical documentation
+- NEVER include the original command text - only the generated note content
+
+Output ONLY the note content:"""
+                note_response = note_model.generate_content(note_prompt)
+                content = note_response.text.strip()
+                # Clean up any markdown code block wrappers
+                if content.startswith('```'):
+                    content = re.sub(r'^```\w*\n?', '', content)
+                    content = re.sub(r'\n?```$', '', content)
+                logger.info(f"📝 AI-generated note content ({len(content)} chars)")
+            except Exception as e:
+                logger.error(f"Note generation failed, using query as content: {e}")
+                # Fallback: strip command prefixes so raw command text isn't the note
+                for prefix in [
+                    'create comprehensive nursing notes ',
+                    'create a doctor note ',
+                    'create a nurse note ',
+                    'create a clinical note ',
+                    'create a note ',
+                    'create note ',
+                    'add a note ',
+                    'add note ',
+                    'write a note ',
+                    'write note ',
+                    'draft ',
+                ]:
+                    if content.lower().startswith(prefix):
+                        content = content[len(prefix):]
+                        break
         result = await canvas_ops.create_doctor_note(content)
         return f"✅ Note created: {result.get('message', 'Success')}"
 
     elif tool == "send_message_to_patient":
         # Convert doctor's intent into a proper patient-facing message using AI
         import re
-        message = query
-        # If the message is explicitly quoted, use it as-is
-        quoted = re.search(r'["\u201c](.+?)["\u201d]', message)
+        message = query.strip().strip('"').strip('\u201c').strip('\u201d').strip("'")
+        # Check for embedded quoted text (e.g., 'send message "please take your meds"')
+        # Only match quotes that are INSIDE a larger command, not wrapping the whole query
+        quoted = re.search(r'\w\s+["\u201c](.+?)["\u201d]', message)
         if quoted:
             message = quoted.group(1)
         else:
@@ -327,19 +350,22 @@ async def chat_agent(chat_history: list[dict]) -> str:
                 rewrite_prompt = f"""Convert this doctor's instruction into a direct, professional message to the patient.
 The doctor said: "{query}"
 
+Patient context (use this to personalize the message):
+{context[:10000]}
+
 Rules:
 - Write ONLY the message text that the patient will see
 - Address the patient directly (use "you/your")
 - Be professional, warm, and clear
+- Use the patient context to include specific, relevant details (medications, conditions, etc.)
 - Do NOT include any prefixes like "Dear patient" or sign-offs
 - Do NOT include quotes around the message
-- Keep it concise (1-2 sentences)
+- Keep it concise (2-4 sentences)
 
 Example inputs and outputs:
 - "ask the patient about his chest pain" → "How has your chest pain been? Could you describe any recent changes or episodes?"
 - "tell the patient to take their medication" → "Please remember to take your medication as prescribed."
-- "send a message to the patient asking him about his follow up" → "When would you be available for your follow-up appointment?"
-- "message the patient about the test results" → "Your test results are ready. We'll discuss them at your next appointment."
+- "draft a compassionate message about his condition" → "We understand this is a difficult time. Your recent labs show improvement, and we want to support your recovery. Please continue taking your medications as prescribed and avoid alcohol."
 
 Output ONLY the message:"""
                 rewrite_response = rewrite_model.generate_content(rewrite_prompt)
