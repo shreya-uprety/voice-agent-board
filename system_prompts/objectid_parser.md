@@ -72,6 +72,7 @@ KNOWN ITEM FORMATS AND CATEGORIES
 ### Other Items
 - `iframe-item-easl-interface` (EASL guidelines chatbot / clinical guidelines)
 - `dashboard-item-chronomed-2` (ChronoMed timeline / DILI assessment timeline)
+- `monitoring-patient-chat` (Patient chat / doctor-patient messaging)
 
 ----------------------------------------------------
 EXAMPLES
@@ -240,6 +241,10 @@ User Query: "What other liver-related investigations are outstanding?"
 User Query: "EASL guidelines"
 → Output:
 {"objectId": "iframe-item-easl-interface"}
+
+User Query: "patient chat"
+→ Output:
+{"objectId": "monitoring-patient-chat"}
 
 User Query: "patient profile"
 → Output:

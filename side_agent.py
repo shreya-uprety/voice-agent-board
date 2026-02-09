@@ -73,9 +73,13 @@ def parse_tool(query):
         return {"query": query, "tool": "navigate_canvas"}
     if any(kw in q_lower for kw in ['create task', 'add task', 'todo', 'to-do', 'reminder']):
         return {"query": query, "tool": "generate_task"}
+    # send_message_to_patient MUST be checked before schedule/notification
+    # because message content may contain words like "follow up", "alert", etc.
+    if any(kw in q_lower for kw in ['message patient', 'message the patient', 'message to the patient', 'send a message', 'send message to patient', 'tell the patient', 'text the patient', 'chat with patient']):
+        return {"query": query, "tool": "send_message_to_patient"}
     if any(kw in q_lower for kw in ['schedule', 'appointment', 'follow-up', 'follow up']):
         return {"query": query, "tool": "create_schedule"}
-    if any(kw in q_lower for kw in ['notify', 'notification', 'alert', 'send message']):
+    if any(kw in q_lower for kw in ['notify', 'notification', 'alert']):
         return {"query": query, "tool": "send_notification"}
     # ONLY create labs when user explicitly says "add" or "create" or "post"
     if any(kw in q_lower for kw in ['add lab', 'create lab', 'post lab', 'put lab']):

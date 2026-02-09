@@ -750,6 +750,49 @@ async def create_notification(payload):
             "message": str(e)
         }
 
+async def send_patient_message(message):
+    """Send a message to a patient via the chat API"""
+    patient_id = patient_manager.get_patient_id()
+    url = BASE_URL + f"/api/chat/{patient_id}"
+
+    api_payload = {
+        "role": "doctor",
+        "text": message
+    }
+
+    with open(f"{config.output_dir}/patient_message_payload.json", "w", encoding="utf-8") as f:
+        json.dump(api_payload, f, ensure_ascii=False, indent=4)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=api_payload, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                print(f"Patient message API status: {response.status}")
+
+                if response.status in [200, 201]:
+                    data = await response.json()
+                    with open(f"{config.output_dir}/patient_message_response.json", "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=4)
+                    return {
+                        "status": "success",
+                        "message": "Message sent to patient",
+                        "api_response": data
+                    }
+                else:
+                    error_text = await response.text()
+                    print(f"⚠️ Patient message API returned {response.status}: {error_text[:200]}")
+                    with open(f"{config.output_dir}/patient_message_response.json", "w", encoding="utf-8") as f:
+                        json.dump({"status": "error", "code": response.status, "error": error_text}, f, ensure_ascii=False, indent=4)
+                    return {
+                        "status": "error",
+                        "message": f"Message failed (API returned {response.status})"
+                    }
+    except Exception as e:
+        print(f"❌ Error sending patient message: {e}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
 async def create_legal(payload):
     """Create legal compliance report on board"""
     url = BASE_URL + "/api/legal-compliance"

@@ -234,6 +234,24 @@ Examples: "notify the team about critical labs", "send alert about patient statu
             }
         },
         {
+            "name": "send_message_to_patient",
+            "description": """Send a message to the patient via the patient chat system.
+
+Call this tool when user says: "message the patient", "tell the patient", "text the patient", "chat with patient", "send message to patient"
+
+Examples: "tell the patient to take their medication", "message the patient about the follow-up", "text the patient the test results".""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The message to send to the patient"
+                    }
+                },
+                "required": ["message"]
+            }
+        },
+        {
             "name": "create_lab_results",
             "description": """Add a panel showing test results to the board.
 

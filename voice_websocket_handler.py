@@ -459,6 +459,24 @@ Examples: "notify the team about critical labs", "send alert about patient statu
                 }
             },
             {
+                "name": "send_message_to_patient",
+                "description": """Send a message to the patient via the patient chat system.
+
+Call this tool when user says: "message the patient", "tell the patient", "text the patient", "chat with patient", "send message to patient"
+
+Examples: "tell the patient to take their medication", "message the patient about the follow-up", "text the patient the test results".""",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "description": "The message to send to the patient"
+                        }
+                    },
+                    "required": ["message"]
+                }
+            },
+            {
                 "name": "create_lab_results",
                 "description": """Add a panel showing test results to the board.
 
@@ -1273,6 +1291,10 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                             "scan": "raw-lab-image-radiology-1",
                             "ct scan": "raw-lab-image-radiology-1",
                             "mri": "raw-lab-image-radiology-1",
+                            # Patient Chat
+                            "patient chat": "monitoring-patient-chat",
+                            "message": "monitoring-patient-chat",
+                            "chat": "monitoring-patient-chat",
                         }
                         
                         # Try direct mapping first (check longer/more specific keys first)
@@ -1589,6 +1611,23 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                             "api_response": notif_result.get("api_response")
                         })
                     
+                    elif function_name == "send_message_to_patient":
+                        # Send message to patient
+                        message = arguments.get("message", "")
+                        logger.info(f"💬 Sending message to patient: {message}")
+                        msg_result = await canvas_ops.send_patient_message(message)
+                        # Focus on patient chat after sending
+                        try:
+                            await asyncio.sleep(0.3)
+                            await canvas_ops.focus_item("monitoring-patient-chat")
+                        except Exception as focus_error:
+                            logger.error(f"Failed to focus on patient chat: {focus_error}")
+                        result = json.dumps({
+                            "status": msg_result.get("status", "done"),
+                            "message": msg_result.get("message", "Message sent to patient"),
+                            "api_response": msg_result.get("api_response")
+                        })
+
                     elif function_name == "create_lab_results" or function_name == "add_results_panel":
                         # Create lab results on the board
                         labs = arguments.get("labs", [])

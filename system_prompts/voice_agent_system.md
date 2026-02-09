@@ -234,6 +234,11 @@ This rule overrides ALL other rules. User's "stop" command = immediate silence.
 - Action: Call send_notification with message
 - Response: "Sent"
 
+### send_message_to_patient
+- User says: "message the patient" OR "tell the patient" OR "text the patient"
+- Action: Call send_message_to_patient with the message
+- Response: "Sent"
+
 ## RULE 5: FORBIDDEN BEHAVIORS
 
 ### NEVER DO THESE:

@@ -139,6 +139,10 @@ TOPIC_FOCUS_MAP = {
     "easl": "iframe-item-easl-interface",
     "guideline": "iframe-item-easl-interface",
     "guidelines": "iframe-item-easl-interface",
+
+    # Patient Chat
+    "patient chat": "monitoring-patient-chat",
+    "patient message": "monitoring-patient-chat",
 }
 
 
@@ -244,6 +248,7 @@ async def chat_agent(chat_history: list[dict]) -> str:
                     "raw-lab-image-2": "lab report",
                     "raw-lab-image-3": "lab report",
                     "iframe-item-easl-interface": "EASL guidelines",
+                    "monitoring-patient-chat": "patient chat",
                 }
                 # Safely get friendly name
                 object_id_str = str(object_id) if not isinstance(object_id, str) else object_id
@@ -257,6 +262,39 @@ async def chat_agent(chat_history: list[dict]) -> str:
         result = await side_agent.create_schedule(query, context)
         return f"✅ Schedule created: {result.get('message', result.get('status', 'Success'))}"
     
+    elif tool == "send_message_to_patient":
+        # Extract the actual message from the query (strip command prefixes)
+        import re
+        message = query
+        # Try to extract quoted text first
+        quoted = re.search(r'["\u201c](.+?)["\u201d]', message)
+        if quoted:
+            message = quoted.group(1)
+        else:
+            # Strip known command prefixes
+            for prefix in [
+                'send a message to the patient saying ',
+                'send a message to the patient ',
+                'send message to the patient saying ',
+                'send message to the patient ',
+                'message the patient saying ',
+                'message the patient ',
+                'tell the patient to ',
+                'tell the patient ',
+                'text the patient ',
+                'chat with patient ',
+            ]:
+                if message.lower().startswith(prefix):
+                    message = message[len(prefix):]
+                    break
+        result = await canvas_ops.send_patient_message(message)
+        # Focus on patient chat after sending
+        try:
+            await canvas_ops.focus_item("monitoring-patient-chat")
+        except Exception:
+            pass
+        return f"✅ Message sent to patient: {result.get('message', 'Success')}"
+
     elif tool == "send_notification":
         result = await canvas_ops.create_notification({"message": query})
         return f"✅ Notification sent: {result.get('message', 'Success')}"

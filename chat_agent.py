@@ -334,6 +334,7 @@ class ToolExecutor:
             "send_easl_query": self.send_easl_query,
             "create_schedule": self.create_schedule,
             "send_notification": self.send_notification,
+            "send_message_to_patient": self.send_message_to_patient,
             "create_diagnosis_report": self.create_diagnosis_report,
             "create_patient_report": self.create_patient_report,
             "create_legal_report": self.create_legal_report,
@@ -540,6 +541,24 @@ class ToolExecutor:
                                 "message": {
                                     "type": "string",
                                     "description": "Notification message content"
+                                }
+                            },
+                            "required": ["patient_id", "message"]
+                        }
+                    ),
+                    types.FunctionDeclaration(
+                        name="send_message_to_patient",
+                        description="Send a message to the patient via the patient chat system.",
+                        parameters={
+                            "type": "object",
+                            "properties": {
+                                "patient_id": {
+                                    "type": "string",
+                                    "description": "The patient ID"
+                                },
+                                "message": {
+                                    "type": "string",
+                                    "description": "The message to send to the patient"
                                 }
                             },
                             "required": ["patient_id", "message"]
@@ -850,6 +869,10 @@ class ToolExecutor:
     def send_notification(self, patient_id: str, message: str) -> Dict[str, Any]:
         """Send notification to care team."""
         return asyncio.run(self.canvas_tools.send_notification(patient_id, message))
+
+    def send_message_to_patient(self, patient_id: str, message: str) -> Dict[str, Any]:
+        """Send a message to the patient."""
+        return asyncio.run(self.canvas_tools.send_message_to_patient(patient_id, message))
     
     def create_diagnosis_report(self, patient_id: str, summary: str) -> Dict[str, Any]:
         """Create diagnosis report on board."""

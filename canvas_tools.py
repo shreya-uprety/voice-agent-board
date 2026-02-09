@@ -313,6 +313,59 @@ class CanvasTools:
                 "message": f"Failed to send notification: {str(e)}"
             }
     
+    async def send_message_to_patient(self, patient_id: str, message: str) -> Dict[str, Any]:
+        """
+        Send a message to a patient via the chat API.
+
+        Args:
+            patient_id: Patient ID
+            message: Message text to send
+
+        Returns:
+            Dict with status and message result
+        """
+        try:
+            logger.info(f"Sending message to patient {patient_id}: {message[:50]}...")
+
+            chat_payload = {
+                "role": "doctor",
+                "text": message
+            }
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.api_url}/chat/{patient_id}",
+                    json=chat_payload,
+                    timeout=10.0
+                )
+
+                if response.status_code in [200, 201]:
+                    result = response.json()
+                    logger.info("Message sent to patient successfully")
+                    # Auto-focus on patient chat
+                    try:
+                        await self.focus_board_item(patient_id, "monitoring-patient-chat")
+                    except Exception:
+                        pass
+                    return {
+                        "status": "success",
+                        "message": "Message sent to patient",
+                        "data": result
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"Failed to send message: HTTP {response.status_code}",
+                        "details": response.text
+                    }
+
+        except Exception as e:
+            logger.error(f"Error sending message to patient: {e}")
+            return {
+                "status": "error",
+                "message": f"Failed to send message: {str(e)}"
+            }
+
     async def create_diagnosis_report(self, patient_id: str, diagnosis_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Create a DILI diagnostic report on the board.
