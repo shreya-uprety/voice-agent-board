@@ -223,7 +223,7 @@ async def chat_agent(chat_history: list[dict]) -> str:
     
     if tool == "get_easl_answer":
         result = await side_agent.trigger_easl(query)
-        return f"✅ EASL query completed. Result: {json.dumps(result, indent=2)}"
+        return "Query sent to EASL guidelines."
     
     elif tool == "generate_task":
         # Use generate_task_obj (no background processing/raw EHR posting)
@@ -237,7 +237,7 @@ async def chat_agent(chat_history: list[dict]) -> str:
                 await canvas_ops.focus_item(todo_id)
             except Exception as e:
                 logger.error(f"Failed to auto-focus on TODO: {e}")
-        return f"✅ Task created: {task_obj.get('title', 'Task')}"
+        return f"Task created: {task_obj.get('title', 'Task')}"
     
     elif tool == "navigate_canvas":
         try:
@@ -272,14 +272,14 @@ async def chat_agent(chat_history: list[dict]) -> str:
                 # Safely get friendly name
                 object_id_str = str(object_id) if not isinstance(object_id, str) else object_id
                 friendly_name = friendly_names.get(object_id_str, "the requested section")
-                return f"✅ Focused on {friendly_name}"
-            return "❌ Could not identify the section to focus on"
+                return f"Focused on {friendly_name}."
+            return "Could not identify the section to focus on."
         except Exception as e:
-            return f"❌ Navigation failed: {str(e)}"
+            return f"Navigation failed: {str(e)}"
     
     elif tool == "create_schedule":
         result = await side_agent.create_schedule(query, context)
-        return f"✅ Schedule created: {result.get('message', result.get('status', 'Success'))}"
+        return "Schedule created successfully."
     
     elif tool == "create_doctor_note":
         # Always use AI to generate proper clinical note content from the doctor's request
@@ -341,7 +341,7 @@ Output ONLY the note content:"""
                         content = content[len(prefix):]
                         break
         result = await canvas_ops.create_doctor_note(content)
-        return f"✅ Note created: {result.get('message', 'Success')}"
+        return "Note created successfully."
 
     elif tool == "send_message_to_patient":
         # Convert doctor's intent into a proper patient-facing message using AI
@@ -408,39 +408,39 @@ Output ONLY the message:"""
             await canvas_ops.focus_item("monitoring-patient-chat")
         except Exception:
             pass
-        return f"✅ Message sent to patient: {result.get('message', 'Success')}"
+        return "Message sent to patient."
 
     elif tool == "send_notification":
         result = await canvas_ops.create_notification({"message": query})
-        return f"✅ Notification sent: {result.get('message', 'Success')}"
+        return "Notification sent."
     
     elif tool == "create_lab_results":
         # Parse lab values from query using AI
         lab_data = await side_agent.parse_lab_values(query, context)
         if lab_data:
             result = await canvas_ops.create_lab(lab_data)
-            return f"✅ Lab results posted to board: {result.get('id', 'Success')}"
-        return "❌ Could not parse lab values from the query. Please provide values like 'ALT 110, AST 150'"
+            return "Lab results posted to board."
+        return "Could not parse lab values from the query. Please provide values like 'ALT 110, AST 150'."
     
     elif tool == "generate_diagnosis":
         result = await side_agent.create_dili_diagnosis()
-        return f"✅ DILI diagnosis generated"
+        return "DILI diagnosis generated."
     
     elif tool == "generate_patient_report":
         result = await side_agent.create_patient_report()
-        return f"✅ Patient report generated"
+        return "Patient report generated."
     
     elif tool == "generate_legal_report":
         result = await side_agent.create_legal_doc()
-        return f"✅ Legal report generated"
+        return "Legal report generated."
 
     elif tool == "generate_ai_diagnosis":
         result = await side_agent.create_ai_diagnosis()
-        return f"✅ AI diagnosis generated"
+        return "AI diagnosis generated."
 
     elif tool == "generate_ai_treatment_plan":
         result = await side_agent.create_ai_treatment_plan()
-        return f"✅ AI treatment plan generated"
+        return "AI treatment plan generated."
     
     else:
         # General Q&A - pass context directly (no redundant fetch)
