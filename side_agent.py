@@ -91,7 +91,10 @@ def parse_tool(query):
         return {"query": query, "tool": "navigate_canvas"}
 
     # Task creation - explicit create/add commands
+    # Also match "create a ... task" patterns (e.g. "create a lab follow up task")
     if any(kw in q_lower for kw in ['create task', 'add task', 'todo', 'to-do', 'reminder']):
+        return {"query": query, "tool": "generate_task"}
+    if re.search(r'(create|add)\s+.{0,30}\btask\b', q_lower):
         return {"query": query, "tool": "generate_task"}
 
     # send_message_to_patient MUST be checked before schedule/notification

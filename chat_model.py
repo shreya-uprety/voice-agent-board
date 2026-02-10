@@ -226,8 +226,18 @@ async def chat_agent(chat_history: list[dict]) -> str:
         return f"✅ EASL query completed. Result: {json.dumps(result, indent=2)}"
     
     elif tool == "generate_task":
-        result = await side_agent.generate_task_workflow(query)
-        return f"✅ Task workflow created successfully. {json.dumps(result, indent=2)}"
+        # Use generate_task_obj (no background processing/raw EHR posting)
+        task_obj = await side_agent.generate_task_obj(query)
+        todo_response = await canvas_ops.create_todo(task_obj)
+        todo_id = todo_response.get('id')
+        # Auto-focus on the newly created TODO
+        if todo_id:
+            try:
+                await asyncio.sleep(0.5)
+                await canvas_ops.focus_item(todo_id)
+            except Exception as e:
+                logger.error(f"Failed to auto-focus on TODO: {e}")
+        return f"✅ Task created: {task_obj.get('title', 'Task')}"
     
     elif tool == "navigate_canvas":
         try:
