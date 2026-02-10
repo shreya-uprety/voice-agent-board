@@ -156,13 +156,28 @@ TOPIC_FOCUS_MAP = {
 
 
 def detect_focus_topic(query: str) -> str:
-    """Detect which board item to focus based on query keywords"""
+    """Detect which board item to focus based on query keywords.
+
+    Uses priority tiers: specific clinical terms (labs, meds, diagnoses) are checked
+    first so they win over generic terms like 'patient' which appear in most queries.
+    """
     query_lower = query.lower()
-    
+
+    # Generic keywords that should only match if no specific topic matches
+    generic_keywords = {"patient", "overview", "profile", "medical situation", "report", "reports"}
+
+    # First pass: check specific (non-generic) keywords, longest first
     for keyword in sorted(TOPIC_FOCUS_MAP.keys(), key=len, reverse=True):
+        if keyword in generic_keywords:
+            continue
         if keyword in query_lower:
             return TOPIC_FOCUS_MAP[keyword]
-    
+
+    # Second pass: check generic keywords only if nothing specific matched
+    for keyword in sorted(generic_keywords, key=len, reverse=True):
+        if keyword in query_lower:
+            return TOPIC_FOCUS_MAP[keyword]
+
     return None
 
 
