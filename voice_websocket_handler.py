@@ -14,6 +14,7 @@ from datetime import datetime
 from fastapi import WebSocket, WebSocketDisconnect
 from google import genai
 from google.genai import types
+import google.generativeai as genai_legacy
 import side_agent
 import canvas_ops
 from patient_manager import patient_manager
@@ -1714,9 +1715,49 @@ FORBIDDEN: Do NOT continue speaking after calling this tool.""",
                             })
                     
                     elif function_name == "create_doctor_note":
-                        # Create doctor/nurse note
-                        content = arguments.get("content", "")
-                        logger.info(f"📝 Creating doctor note: {content[:50]}")
+                        # Create doctor/nurse note with AI-enhanced content
+                        raw_content = arguments.get("content", "")
+                        logger.info(f"📝 Creating doctor note: {raw_content[:50]}")
+
+                        # AI-enhance the note with patient context (like chat agent)
+                        try:
+                            if not self.context_data:
+                                self.context_data = await canvas_ops.get_board_items_async()
+                            context_str = json.dumps(self.context_data, indent=2) if self.context_data else ""
+
+                            genai_legacy.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+                            note_model = genai_legacy.GenerativeModel("gemini-2.0-flash")
+                            note_prompt = f"""Generate professional clinical notes based on the doctor's request and patient data.
+
+Doctor's request: "{raw_content}"
+
+Patient data (board context):
+{context_str[:20000]}
+
+Rules:
+- Write the note content ONLY (no metadata, no JSON, no markdown code blocks)
+- Use professional clinical documentation style
+- Include relevant findings, assessments, and plans from the patient data
+- Be comprehensive but concise
+- Use appropriate medical terminology
+- Format with clear sections if the request calls for detailed notes
+- If the request is simple (e.g., "patient refused medication"), write a brief note
+- If the request asks for comprehensive/detailed notes, write thorough clinical documentation
+- NEVER include the original command text - only the generated note content
+
+Output ONLY the note content:"""
+                            note_response = note_model.generate_content(note_prompt)
+                            content = note_response.text.strip()
+                            # Clean up any markdown code block wrappers
+                            import re
+                            if content.startswith('```'):
+                                content = re.sub(r'^```\w*\n?', '', content)
+                                content = re.sub(r'\n?```$', '', content)
+                            logger.info(f"📝 AI-generated note content ({len(content)} chars)")
+                        except Exception as e:
+                            logger.error(f"Note AI enhancement failed, using raw content: {e}")
+                            content = raw_content
+
                         note_result = await canvas_ops.create_doctor_note(content)
                         note_id = note_result.get("id")
                         result = json.dumps({

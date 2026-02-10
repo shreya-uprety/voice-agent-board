@@ -237,43 +237,52 @@ async def chat_agent(chat_history: list[dict]) -> str:
                 await canvas_ops.focus_item(todo_id)
             except Exception as e:
                 logger.error(f"Failed to auto-focus on TODO: {e}")
+            # Start background animation for automatic status updates (like voice/side agents)
+            if 'todos' in task_obj:
+                asyncio.create_task(side_agent._animate_todo_tasks(todo_id, task_obj['todos']))
         return f"Task created: {task_obj.get('title', 'Task')}"
     
     elif tool == "navigate_canvas":
         try:
-            object_id = await side_agent.resolve_object_id(query, context)
-            if object_id:
-                await canvas_ops.focus_item(object_id)
-                # Return friendly message based on object_id
-                friendly_names = {
-                    "encounter-track-1": "encounters timeline",
-                    "dashboard-item-lab-table": "lab results table",
-                    "dashboard-item-lab-chart": "lab results chart",
-                    "lab-track-1": "lab timeline",
-                    "medication-track-1": "medication timeline",
-                    "differential-diagnosis": "differential diagnosis",
-                    "adverse-event-analytics": "adverse events analytics",
-                    "risk-track-1": "risk events timeline",
-                    "key-events-track-1": "key events timeline",
-                    "sidebar-1": "patient sidebar",
-                    "referral-doctor-info": "referral letter",
-                    "referral-letter-image": "referral letter",
-                    "raw-encounter-image-1": "encounter reports",
-                    "raw-encounter-image-2": "encounter reports",
-                    "raw-encounter-image-3": "encounter reports",
-                    "raw-lab-image-radiology-1": "radiology report",
-                    "raw-lab-image-radiology-2": "radiology report",
-                    "raw-lab-image-1": "lab report",
-                    "raw-lab-image-2": "lab report",
-                    "raw-lab-image-3": "lab report",
-                    "iframe-item-easl-interface": "EASL guidelines",
-                    "monitoring-patient-chat": "patient chat",
-                }
-                # Safely get friendly name
-                object_id_str = str(object_id) if not isinstance(object_id, str) else object_id
-                friendly_name = friendly_names.get(object_id_str, "the requested section")
-                return f"Focused on {friendly_name}."
-            return "Could not identify the section to focus on."
+            result = await side_agent.resolve_object_id(query, context)
+            # resolve_object_id returns {"object_id": str, "focus_result": dict} and already focuses
+            if result and isinstance(result, dict):
+                object_id_str = result.get("object_id", "")
+            elif result and isinstance(result, str):
+                object_id_str = result
+            else:
+                return "Could not identify the section to focus on."
+
+            if not object_id_str:
+                return "Could not identify the section to focus on."
+
+            # Return friendly message based on object_id
+            friendly_names = {
+                "encounter-track-1": "encounters timeline",
+                "dashboard-item-lab-table": "lab results table",
+                "dashboard-item-lab-chart": "lab results chart",
+                "lab-track-1": "lab timeline",
+                "medication-track-1": "medication timeline",
+                "differential-diagnosis": "differential diagnosis",
+                "adverse-event-analytics": "adverse events analytics",
+                "risk-track-1": "risk events timeline",
+                "key-events-track-1": "key events timeline",
+                "sidebar-1": "patient sidebar",
+                "referral-doctor-info": "referral letter",
+                "referral-letter-image": "referral letter",
+                "raw-encounter-image-1": "encounter reports",
+                "raw-encounter-image-2": "encounter reports",
+                "raw-encounter-image-3": "encounter reports",
+                "raw-lab-image-radiology-1": "radiology report",
+                "raw-lab-image-radiology-2": "radiology report",
+                "raw-lab-image-1": "lab report",
+                "raw-lab-image-2": "lab report",
+                "raw-lab-image-3": "lab report",
+                "iframe-item-easl-interface": "EASL guidelines",
+                "monitoring-patient-chat": "patient chat",
+            }
+            friendly_name = friendly_names.get(object_id_str, "the requested section")
+            return f"Focused on {friendly_name}."
         except Exception as e:
             return f"Navigation failed: {str(e)}"
     
